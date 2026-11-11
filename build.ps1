@@ -12,7 +12,7 @@ if (-not (Test-Path $Compiler)) {
 }
 
 $SourceDir = Join-Path $PSScriptRoot "src"
-$Output = Join-Path $PSScriptRoot "fluid.exe"
+$Output = Join-Path $PSScriptRoot "pace.exe"
 $Sources = Get-ChildItem -Path (Join-Path $SourceDir "*.cpp") | ForEach-Object { $_.FullName }
 
 if ($Sources.Count -eq 0) {

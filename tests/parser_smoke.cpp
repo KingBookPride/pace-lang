@@ -9,7 +9,7 @@
 namespace {
 
 Program parseText(const std::string& text) {
-    Source source{"parser_smoke.fld", text};
+    Source source{"parser_smoke.pace", text};
     Lexer lexer(source);
     Parser parser(source.file, lexer.tokenize());
     return parser.parse();

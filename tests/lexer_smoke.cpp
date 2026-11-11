@@ -9,7 +9,7 @@
 namespace {
 
 std::vector<Token> lex(const std::string& text) {
-    Source source{"lexer_smoke.fld", text};
+    Source source{"lexer_smoke.pace", text};
     Lexer lexer(source);
     return lexer.tokenize();
 }

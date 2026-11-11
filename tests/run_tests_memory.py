@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """沙箱/受限环境下的内存验证驱动。
 
-本脚本复用 run_tests.py 的比对逻辑，但把 main.fld 源码通过 stdin 传给
+本脚本复用 run_tests.py 的比对逻辑，但把 main.pace 源码通过 stdin 传给
 membatch.exe 在内存中执行，避免原生 exe 读取文件被系统拒绝。
 正式测试仍应使用 `python tests/run_tests.py`。
 """
@@ -20,9 +20,9 @@ TIMEOUT_SECONDS = 10
 
 
 def run_case(case_dir: Path) -> tuple[bool, list[str]]:
-    main_lang = case_dir / "main.fld"
+    main_lang = case_dir / "main.pace"
     if not main_lang.exists():
-        return (False, ["缺少 main.fld"])
+        return (False, ["缺少 main.pace"])
     source = main_lang.read_bytes()
     input_path = case_dir / "input.txt"
     input_bytes = input_path.read_bytes() if input_path.exists() else b""

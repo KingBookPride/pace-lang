@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-EXE = ROOT / "fluid.exe"
+EXE = ROOT / "pace.exe"
 
 VALID = """function add a, b
   return a
@@ -27,7 +27,7 @@ CONFLICT = """function main
 
 def run_case(name, source, expected_exit, expected_text):
     with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / "main.fld"
+        path = Path(directory) / "main.pace"
         path.write_text(source, encoding="utf-8")
         result = subprocess.run(
             [str(EXE), "run", str(path)],

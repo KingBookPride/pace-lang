@@ -21,7 +21,7 @@ int main(int argc, char* argv[]) {
 #endif
 
     if (argc != 3 || std::string(argv[1]) != "run") {
-        std::cerr << "用法: fluid.exe run <file.fld>\n";
+        std::cerr << "用法: pace.exe run <file.pace>\n";
         return 2;
     }
 

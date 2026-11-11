@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""按 R3 §6.1 运行 tests/cases 下的全部 .fld 用例。
+"""按 R3 §6.1 运行 tests/cases 下的全部 .pace 用例。
 
 每个用例目录包含：
-  main.fld              必填，被测程序
+  main.pace              必填，被测程序
   input.txt              可选，stdin
   expected.out           可选，stdout 精确匹配（统一 CRLF/LF，忽略 BOM）
   expected.err_contains  可选，每一非空行都必须作为子串出现在 stderr 的某一行
@@ -11,7 +11,7 @@
 
 用法：
   python tests/run_tests.py
-  python tests/run_tests.py --exe path/to/fluid.exe
+  python tests/run_tests.py --exe path/to/pace.exe
   python tests/run_tests.py --filter input
 """
 
@@ -104,9 +104,9 @@ def discover_cases() -> list[Path]:
 
 
 def run_case(case_dir: Path, exe_path: Path) -> tuple[bool, list[str]]:
-    main_lang = case_dir / "main.fld"
+    main_lang = case_dir / "main.pace"
     if not main_lang.exists():
-        return (False, ["缺少 main.fld"])
+        return (False, ["缺少 main.pace"])
 
     expected = load_expected(case_dir)
     try:
@@ -128,11 +128,11 @@ def run_case(case_dir: Path, exe_path: Path) -> tuple[bool, list[str]]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="运行 .fld 测试用例")
+    parser = argparse.ArgumentParser(description="运行 .pace 测试用例")
     parser.add_argument(
         "--exe",
-        default=str(REPO_ROOT / "fluid.exe"),
-        help="fluid.exe 路径（默认仓库根目录）",
+        default=str(REPO_ROOT / "pace.exe"),
+        help="pace.exe 路径（默认仓库根目录）",
     )
     parser.add_argument("--filter", default=None, help="只运行名称包含该子串的用例")
     args = parser.parse_args()

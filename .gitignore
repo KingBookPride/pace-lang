@@ -1,5 +1,5 @@
 # ============================================================
-# Fluid (.fld) interpreter - GitHub ignore rules
+# Pace (.pace) interpreter - GitHub ignore rules
 # Target: Windows + MinGW g++, Python 3 test driver
 # ============================================================
 
@@ -25,8 +25,8 @@
 *.su
 
 # Explicit product name (belt and braces)
-fluid
-fluid.exe
+pace
+pace.exe
 
 # ---------- Build directories ----------
 build/
