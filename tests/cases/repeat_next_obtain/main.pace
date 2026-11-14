@@ -1,0 +1,10 @@
+function main
+  initialize integer i 0
+  repeat
+    reassign i i + 1
+    output obtain 1 : 0, " ", obtain 2 : "default", "\n"
+    if i < 3
+      next 1, "hello"
+      output "unreachable\n"
+    if i = 4
+      exit 2

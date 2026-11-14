@@ -36,6 +36,18 @@ struct FrameGuard {
     Environment* env_;
 };
 
+// repeat 值栈的 RAII 守卫：嵌套循环、exit/return 等异常路径均恢复外层状态
+struct RepeatValuesGuard {
+    RepeatValuesGuard(
+        std::vector<const std::vector<Value>*>* stack,
+        const std::vector<Value>* values)
+        : stack_(stack) {
+        stack_->push_back(values);
+    }
+    ~RepeatValuesGuard() { stack_->pop_back(); }
+    std::vector<const std::vector<Value>*>* stack_;
+};
+
 } // namespace
 
 Interpreter::Interpreter(
@@ -96,6 +108,29 @@ Value Interpreter::eval(const Expr* expr) {
                 "变量 '" + node->name + "' 尚未赋值（处于无值状态）");
         }
         return var->value;
+    }
+    if (const auto* node = dynamic_cast<const ObtainExpr*>(expr)) {
+        if (repeatValuesStack_.empty()) {
+            // 解析期已拦截；保留运行期防御，避免手工构造 AST 时崩溃。
+            throw LangError("", node->line, node->col, "obtain 只能在 repeat 内使用");
+        }
+
+        Value rawIndex = eval(node->index.get());
+        if (!isInteger(rawIndex) || asInteger(rawIndex) <= 0) {
+            throw LangError("", node->line, node->col,
+                "obtain 索引必须是 1-based 正整数（不支持 0、负数或浮点数）");
+        }
+        const std::int64_t oneBased = asInteger(rawIndex);
+        const std::vector<Value>& values = *repeatValuesStack_.back();
+        if (static_cast<std::uint64_t>(oneBased) <=
+            static_cast<std::uint64_t>(values.size())) {
+            return values[static_cast<std::size_t>(oneBased - 1)];
+        }
+        if (node->defaultValue) {
+            return eval(node->defaultValue.get());
+        }
+        throw LangError("", node->line, node->col,
+            "obtain 未取到上一轮 next 传入的对应值，且未提供默认值");
     }
     if (const auto* node = dynamic_cast<const Unary*>(expr)) {
         Value operand = eval(node->operand.get());
@@ -241,6 +276,14 @@ void Interpreter::execute(const Stmt* stmt) {
         }
         return;
     }
+    if (const auto* node = dynamic_cast<const NextStmt*>(stmt)) {
+        NextSignal signal;
+        signal.values.reserve(node->values.size());
+        for (const auto& value : node->values) {
+            signal.values.push_back(eval(value.get()));
+        }
+        throw signal;
+    }
     if (const auto* node = dynamic_cast<const ExitStmt*>(stmt)) {
         Value raw = eval(node->value.get());
         std::int64_t n = 0;
@@ -307,6 +350,10 @@ void Interpreter::executeBlock(const Block& body) {
 }
 
 void Interpreter::executeRepeat(const RepeatStmt& stmt) {
+    // 第一轮为空；自然结束一轮后清空，next 则用其携带的值覆盖下一轮。
+    std::vector<Value> values;
+    RepeatValuesGuard valuesGuard(&repeatValuesStack_, &values);
+
     while (true) {
         bool broke = false;
         {
@@ -315,12 +362,16 @@ void Interpreter::executeRepeat(const RepeatStmt& stmt) {
                 for (const auto& statement : stmt.body) {
                     execute(statement.get());
                 }
+                values.clear();
+            } catch (NextSignal& signal) {
+                values = std::move(signal.values);
             } catch (ExitSignal& signal) {
                 if (signal.levels > 1) {
                     signal.levels -= 1;
                     throw;
                 }
                 broke = true;
+                values.clear();
             }
         }
         if (broke) break;

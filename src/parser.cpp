@@ -251,6 +251,7 @@ std::unique_ptr<FunctionDef> Parser::parseFunction() {
     function->col = keyword.col;
 
     AliasMap aliases;
+    repeatDepth_ = 0; // 每个函数独立判断 repeat 词法上下文
     function->body = parseBlock(BlockContext::FunctionTop, aliases);
     return function;
 }
@@ -298,6 +299,7 @@ std::unique_ptr<Stmt> Parser::parseStatement(
     case TokenKind::Repeat: return parseRepeat(command, aliases);
     case TokenKind::If: return parseIf(command, aliases);
     case TokenKind::Exit: return parseExit(command);
+    case TokenKind::Next: return parseNext(command);
     case TokenKind::Return: return parseReturn(command);
     case TokenKind::Invoke: return parseInvokeStatement(command);
     case TokenKind::Otherwise:
@@ -437,7 +439,9 @@ std::unique_ptr<Stmt> Parser::parseRepeat(const Token& command, AliasMap& aliase
     advance();
     expectNewline();
     auto statement = std::make_unique<RepeatStmt>(command.line, command.col);
+    ++repeatDepth_;
     statement->body = parseBlock(BlockContext::Nested, aliases);
+    --repeatDepth_;
     return statement;
 }
 
@@ -463,6 +467,30 @@ std::unique_ptr<Stmt> Parser::parseExit(const Token& command) {
     advance();
     auto statement = std::make_unique<ExitStmt>(command.line, command.col);
     statement->value = parseExpression();
+    expectNewline();
+    return statement;
+}
+
+std::unique_ptr<Stmt> Parser::parseNext(const Token& command) {
+    if (repeatDepth_ == 0) {
+        fail(command, "next 只能在 repeat 内使用（包括 repeat 内的 if 块）");
+    }
+
+    advance();
+    auto statement = std::make_unique<NextStmt>(command.line, command.col);
+    if (check(TokenKind::Newline)) {
+        fail(command, "next 至少需要一个传给下一轮的表达式");
+    }
+
+    while (true) {
+        statement->values.push_back(parseExpression());
+        if (!match(TokenKind::Comma)) {
+            break;
+        }
+        if (check(TokenKind::Newline)) {
+            fail(peek(), "next 值列表不允许尾逗号");
+        }
+    }
     expectNewline();
     return statement;
 }
@@ -586,6 +614,20 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     case TokenKind::Identifier:
         advance();
         return std::make_unique<VarRef>(token.line, token.col, token.text);
+    case TokenKind::Obtain: {
+        if (repeatDepth_ == 0) {
+            fail(token, "obtain 只能在 repeat 内使用（包括 repeat 内的 if 块）");
+        }
+        advance();
+        // 索引与默认值均为完整表达式；冒号只属于 obtain，右侧默认值按需解析。
+        auto index = parseExpression();
+        std::unique_ptr<Expr> defaultValue;
+        if (match(TokenKind::Colon)) {
+            defaultValue = parseExpression();
+        }
+        return std::make_unique<ObtainExpr>(
+            token.line, token.col, std::move(index), std::move(defaultValue));
+    }
     case TokenKind::Invoke: {
         advance();
         InvokeParts parts = parseInvokeParts();
@@ -672,6 +714,7 @@ bool Parser::isBuiltinCommand(TokenKind kind) const {
     case TokenKind::Exit:
     case TokenKind::Return:
     case TokenKind::Invoke:
+    case TokenKind::Next:
         return true;
     default:
         return false;

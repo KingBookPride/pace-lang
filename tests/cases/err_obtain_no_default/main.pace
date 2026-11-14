@@ -1,0 +1,4 @@
+function main
+  repeat
+    output obtain 1
+    exit 1

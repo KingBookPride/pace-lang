@@ -1,0 +1,4 @@
+function main
+  repeat
+    output obtain 0 : 99
+    exit 1

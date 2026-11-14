@@ -42,6 +42,8 @@ const std::unordered_map<std::string, TokenKind>& keywords() {
         {"exit", TokenKind::Exit},
         {"return", TokenKind::Return},
         {"invoke", TokenKind::Invoke},
+        {"next", TokenKind::Next},
+        {"obtain", TokenKind::Obtain},
         {"integer", TokenKind::IntegerType},
         {"float", TokenKind::FloatType},
         {"boolean", TokenKind::BooleanType},
@@ -78,6 +80,8 @@ const char* tokenKindName(TokenKind kind) {
     case TokenKind::Exit: return "Exit";
     case TokenKind::Return: return "Return";
     case TokenKind::Invoke: return "Invoke";
+    case TokenKind::Next: return "Next";
+    case TokenKind::Obtain: return "Obtain";
     case TokenKind::IntegerType: return "IntegerType";
     case TokenKind::FloatType: return "FloatType";
     case TokenKind::BooleanType: return "BooleanType";
@@ -98,6 +102,7 @@ const char* tokenKindName(TokenKind kind) {
     case TokenKind::LeftParen: return "LeftParen";
     case TokenKind::RightParen: return "RightParen";
     case TokenKind::Comma: return "Comma";
+    case TokenKind::Colon: return "Colon";
     case TokenKind::Newline: return "Newline";
     case TokenKind::Indent: return "Indent";
     case TokenKind::Dedent: return "Dedent";
@@ -302,6 +307,7 @@ void Lexer::scanToken() {
     case '(': advance(); add(TokenKind::LeftParen, "(", tokenLine, tokenCol); return;
     case ')': advance(); add(TokenKind::RightParen, ")", tokenLine, tokenCol); return;
     case ',': advance(); add(TokenKind::Comma, ",", tokenLine, tokenCol); return;
+    case ':': advance(); add(TokenKind::Colon, ":", tokenLine, tokenCol); return;
     case '=':
         if (peek(1) == '=') {
             fail("本语言用 = 比较，不支持 ==");

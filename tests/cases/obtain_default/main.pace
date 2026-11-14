@@ -1,0 +1,4 @@
+function main
+  repeat
+    output obtain 1 : 15, " ", obtain 2 : "fallback", "\n"
+    exit 1

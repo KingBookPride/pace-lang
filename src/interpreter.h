@@ -21,6 +21,11 @@ struct ExitSignal {
     int levels = 0;
 };
 
+// 跳过当前 repeat 轮次的剩余语句，并把值传给下一轮
+struct NextSignal {
+    std::vector<Value> values;
+};
+
 // 立即退出整个程序（退出码 0），不跨越调用者
 struct ProgramExit {};
 
@@ -54,6 +59,8 @@ private:
     std::ostream& out_;
     std::istream& in_;
     int blockDepth_ = 0;
+    // 每个处于执行中的 repeat 对应栈顶一项；obtain 读取最近一层循环的上一轮值。
+    std::vector<const std::vector<Value>*> repeatValuesStack_;
 };
 
 #endif

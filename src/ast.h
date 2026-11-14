@@ -91,6 +91,19 @@ struct InvokeExpr final : Expr {
     std::vector<std::unique_ptr<Expr>> arguments;
 };
 
+struct ObtainExpr final : Expr {
+    ObtainExpr(
+        int lineValue,
+        int colValue,
+        std::unique_ptr<Expr> indexValue,
+        std::unique_ptr<Expr> defaultValueValue)
+        : Expr(lineValue, colValue),
+          index(std::move(indexValue)),
+          defaultValue(std::move(defaultValueValue)) {}
+    std::unique_ptr<Expr> index;
+    std::unique_ptr<Expr> defaultValue;
+};
+
 struct Stmt {
     Stmt(int lineValue, int colValue) : line(lineValue), col(colValue) {}
     virtual ~Stmt() = default;
@@ -166,6 +179,11 @@ struct IfStmt final : Stmt {
 struct ExitStmt final : Stmt {
     using Stmt::Stmt;
     std::unique_ptr<Expr> value;
+};
+
+struct NextStmt final : Stmt {
+    using Stmt::Stmt;
+    std::vector<std::unique_ptr<Expr>> values;
 };
 
 struct ReturnStmt final : Stmt {

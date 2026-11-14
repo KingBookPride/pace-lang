@@ -251,6 +251,73 @@ int main() {
         check("typed boolean input true", r.exitCode == 0 && r.output == "true", r);
     }
 
+    // 15. next / obtain：跨轮传值、首轮默认、自然结束清空、嵌套 repeat 隔离、索引校验
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer i 0\n"
+            "  repeat\n"
+            "    reassign i i + 1\n"
+            "    output obtain 1 : 0, \"|\", obtain 2 : \"d\", \"\\n\"\n"
+            "    if i < 3\n"
+            "      next i, \"v\"\n"
+            "    if i = 4\n"
+            "      exit 2\n");
+        check("next/obtain 传值与自然结束清空", r.exitCode == 0 &&
+              r.output == "0|d\n1|v\n2|v\n0|d\n", r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  repeat\n"
+            "    output obtain 3 : 42\n"
+            "    exit 1\n");
+        check("obtain 越界回退默认值", r.exitCode == 0 && r.output == "42", r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  repeat\n"
+            "    output obtain -1 : 0\n"
+            "    exit 1\n");
+        check("obtain 负索引 -> 错误", r.exitCode == 1 &&
+              r.error.find("正整数") != std::string::npos, r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  repeat\n"
+            "    output obtain 1.5 : 0\n"
+            "    exit 1\n");
+        check("obtain 浮点索引 -> 错误", r.exitCode == 1 &&
+              r.error.find("正整数") != std::string::npos, r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer i 0\n"
+            "  repeat\n"
+            "    reassign i i + 1\n"
+            "    repeat\n"
+            "      output obtain 1 : \"in\", \"\\n\"\n"
+            "      exit 1\n"
+            "    if i = 2\n"
+            "      exit 2\n"
+            "    next \"out\"\n");
+        check("嵌套 repeat 的 obtain 状态隔离", r.exitCode == 0 &&
+              r.output == "in\nin\n", r);
+    }
+    {
+        auto r = run("function main\n  next 1\n");
+        check("next 在 repeat 外 -> 解析错误", r.exitCode == 1 &&
+              r.error.find("repeat") != std::string::npos, r);
+    }
+    {
+        auto r = run("function main\n  output obtain 1 : 0\n");
+        check("obtain 在 repeat 外 -> 解析错误", r.exitCode == 1 &&
+              r.error.find("repeat") != std::string::npos, r);
+    }
+
     std::cout << "\n==== interp_smoke 汇总: PASS=" << passCount << " FAIL=" << failCount
               << " ====\n";
     std::cout.flush();

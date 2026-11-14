@@ -45,6 +45,7 @@ private:
     std::vector<Signature> signatures_;
     std::unordered_map<std::string, std::size_t> signatureByName_;
     std::vector<FunctionRegion> regions_;
+    int repeatDepth_ = 0; // 解析期 repeat 词法嵌套深度，供 next/obtain 校验
 
     const Token& peek(std::size_t offset = 0) const;
     bool check(TokenKind kind) const;
@@ -78,6 +79,7 @@ private:
     std::unique_ptr<Stmt> parseRepeat(const Token& command, AliasMap& aliases);
     std::unique_ptr<Stmt> parseIf(const Token& command, AliasMap& aliases);
     std::unique_ptr<Stmt> parseExit(const Token& command);
+    std::unique_ptr<Stmt> parseNext(const Token& command);
     std::unique_ptr<Stmt> parseReturn(const Token& command);
     std::unique_ptr<Stmt> parseInvokeStatement(const Token& command);
 

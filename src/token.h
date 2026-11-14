@@ -27,6 +27,8 @@ enum class TokenKind {
     Exit,
     Return,
     Invoke,
+    Next,
+    Obtain,
 
     IntegerType,
     FloatType,
@@ -50,6 +52,7 @@ enum class TokenKind {
     LeftParen,
     RightParen,
     Comma,
+    Colon,
 
     Newline,
     Indent,
