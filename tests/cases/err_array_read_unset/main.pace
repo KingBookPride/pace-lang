@@ -1,0 +1,3 @@
+function main
+  initialize integer a []
+  output a_5

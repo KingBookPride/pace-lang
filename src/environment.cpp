@@ -2,6 +2,8 @@
 
 #include "error.h"
 
+#include <utility>
+
 void Environment::addFunction(const std::string& name, const FunctionDef* function) {
     functions_.emplace(name, function);
 }
@@ -50,12 +52,14 @@ void Environment::declare(
     const std::string& name,
     TypeKind type,
     bool hasValue,
-    const Value& value) {
+    const Value& value,
+    std::size_t dimensions) {
     Variable var;
     var.declaredType = type;
+    var.dimensions = dimensions;
     var.hasValue = hasValue;
-    var.value = value;
-    frames_.back()[name] = var;
+    var.value = deepCopy(value);
+    frames_.back()[name] = std::move(var);
 }
 
 void Environment::remove(const std::string& name) {

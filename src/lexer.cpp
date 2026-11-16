@@ -101,6 +101,9 @@ const char* tokenKindName(TokenKind kind) {
     case TokenKind::GreaterEqual: return "GreaterEqual";
     case TokenKind::LeftParen: return "LeftParen";
     case TokenKind::RightParen: return "RightParen";
+    case TokenKind::LeftBracket: return "LeftBracket";
+    case TokenKind::RightBracket: return "RightBracket";
+    case TokenKind::Underscore: return "Underscore";
     case TokenKind::Comma: return "Comma";
     case TokenKind::Colon: return "Colon";
     case TokenKind::Newline: return "Newline";
@@ -306,6 +309,9 @@ void Lexer::scanToken() {
     case '/': advance(); add(TokenKind::Slash, "/", tokenLine, tokenCol); return;
     case '(': advance(); add(TokenKind::LeftParen, "(", tokenLine, tokenCol); return;
     case ')': advance(); add(TokenKind::RightParen, ")", tokenLine, tokenCol); return;
+    case '[': advance(); add(TokenKind::LeftBracket, "[", tokenLine, tokenCol); return;
+    case ']': advance(); add(TokenKind::RightBracket, "]", tokenLine, tokenCol); return;
+    case '_': advance(); add(TokenKind::Underscore, "_", tokenLine, tokenCol); return;
     case ',': advance(); add(TokenKind::Comma, ",", tokenLine, tokenCol); return;
     case ':': advance(); add(TokenKind::Colon, ":", tokenLine, tokenCol); return;
     case '=':

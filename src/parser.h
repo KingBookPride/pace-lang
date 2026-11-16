@@ -91,6 +91,9 @@ private:
     std::unique_ptr<Expr> parseMultiplicative();
     std::unique_ptr<Expr> parseUnary();
     std::unique_ptr<Expr> parsePrimary();
+    std::unique_ptr<Expr> parseArrayLiteral(const Token& token);
+    std::vector<std::unique_ptr<Expr>> parseIndexSuffixes(const std::string& role);
+    std::unique_ptr<Expr> parseIndexAtom(const std::string& role);
     InvokeParts parseInvokeParts();
 
     TypeKind parseType();

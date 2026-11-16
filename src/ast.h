@@ -49,10 +49,23 @@ struct BoolLit final : Expr {
     bool value;
 };
 
+struct ArrayLit final : Expr {
+    ArrayLit(int lineValue, int colValue, std::vector<std::unique_ptr<Expr>> elementsValue)
+        : Expr(lineValue, colValue), elements(std::move(elementsValue)) {}
+    std::vector<std::unique_ptr<Expr>> elements;
+};
+
 struct VarRef final : Expr {
-    VarRef(int lineValue, int colValue, std::string nameValue)
-        : Expr(lineValue, colValue), name(std::move(nameValue)) {}
+    VarRef(
+        int lineValue,
+        int colValue,
+        std::string nameValue,
+        std::vector<std::unique_ptr<Expr>> indicesValue = {})
+        : Expr(lineValue, colValue),
+          name(std::move(nameValue)),
+          indices(std::move(indicesValue)) {}
     std::string name;
+    std::vector<std::unique_ptr<Expr>> indices;
 };
 
 struct Unary final : Expr {
@@ -117,6 +130,7 @@ using Block = std::vector<std::unique_ptr<Stmt>>;
 struct InitializeDecl {
     TypeKind type;
     std::string name;
+    std::unique_ptr<Expr> dimension; // nullptr=未显式声明维度；_0 仍有表达式节点
     std::unique_ptr<Expr> value;
     int line;
     int col;
@@ -130,6 +144,7 @@ struct InitializeStmt final : Stmt {
 struct ReassignStmt final : Stmt {
     using Stmt::Stmt;
     std::string name;
+    std::vector<std::unique_ptr<Expr>> indices;
     std::unique_ptr<Expr> value;
 };
 
@@ -162,6 +177,7 @@ struct OutputStmt final : Stmt {
 struct InputStmt final : Stmt {
     using Stmt::Stmt;
     std::string name;
+    std::vector<std::unique_ptr<Expr>> indices;
 };
 
 struct RepeatStmt final : Stmt {

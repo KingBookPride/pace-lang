@@ -4,7 +4,7 @@
 
 Pace is an indentation-sensitive, explicitly typed scripting language with automatic typing (`automatic`). Source files use the `.pace` extension. This repository contains its C++17 interpreter.
 
-> Current version: **v0.3.0**
+> Current version: **v0.4.0**
 
 ## Build
 
@@ -62,7 +62,7 @@ Cases live under `tests/cases/<name>/`:
 - stdout is compared exactly; every non-empty line of `expected.err_contains` must appear as a substring on some stderr line (order-independent); each case times out after 10 seconds.
 - Error cases (`expected.exit` = 1) additionally require at least one stderr line matching `file:line:col: 错误: `.
 - Warning cases require at least one stderr line matching `file:line:col: warning: `, an exact stdout match, and exit code 0.
-- There are currently **55** cases: 21 positive, 32 error, 2 warning.
+- There are currently **62** cases: 25 positive, 35 error, 2 warning.
 
 ## Features
 
@@ -79,6 +79,11 @@ Cases live under `tests/cases/<name>/`:
 - `exit N` level semantics (the function body counts as level 1; each enclosing `if`/`repeat` adds one)
 - `next` statement: evaluates one or more comma-separated expressions, abandons the rest of the current `repeat` iteration, and passes those values to the next round (a `continue` with a payload); it is only valid inside a `repeat` (including `if`/`otherwise` blocks within it)
 - `obtain` expression: `obtain <index>` or `obtain <index> : <default>` reads a 1-based value passed by the previous round's `next` in the nearest `repeat`. The index must evaluate to a positive integer (0, negative numbers and floats are errors); a missing slot returns the default, and omitting the default is an error. The first round has no values, and a round that ends naturally clears the passed values
+- Multi-dimensional arrays use `[expr, ...]` literals and `_` suffixes: `initialize integer a_2 []` declares a 2-D array, `initialize float d_0 3.5` declares a scalar, and `reassign a_1_1 99` writes one cell. Without a dimension suffix, the interpreter infers dimensions from the literal's nesting depth; `_0` means a scalar. Ordinary identifiers must not contain `_`
+- Arrays never raise out-of-bounds errors: reading or writing `a_5` / `a_(i+1)` / `b_1_2` automatically materializes the missing path, and skipped cells remain Pace's native unassigned state. Reading a missing leaf raises an unassigned error until a value is written there; missing intermediate paths or subarrays are created as empty arrays
+- Array indices are 1-based and must evaluate to a positive integer or a positive float with zero fractional part; 0, negative values, 1.5, strings, booleans, and extra dimensions beyond the object's declared dimension are errors
+- Arrays have value semantics and are deep-copied on assignment, nesting, function arguments, return values, and `next` / `obtain`; modifying a copy never affects the source
+- Array output uses `[1, true, "hello"]`, nested arrays such as `[1, [2, "p"], true]`, and renders unassigned holes as `unassigned`; `input` supports scalars and full leaf elements such as `input a_5`, but not whole arrays or subarrays
 - Float formatting: shortest round-trippable form, with `.0` appended to integral values
 
 ## Not Implemented
@@ -94,6 +99,7 @@ REPL, formatter, LSP, scientific notation, hexadecimal literals, `else if`, para
 - A variable initializer may be omitted: `initialize integer a` and `initialize automatic b` are both valid; an omitted initializer leaves the variable in the "no value" state, so it must be assigned via `reassign` / `input` before use, otherwise a "not yet assigned" error is raised.
 - `next` and `obtain` are lexically restricted to the body of a `repeat` (including `if` / `otherwise` blocks nested in it). `obtain` indices are 1-based and are not coerced: a float index such as `1.5` is rejected even when mathematically integral.
 - `obtain` with a default is evaluated lazily: the default expression is only evaluated when the requested slot was not supplied by the previous round's `next`.
+- Array dimensions are fixed after `initialize`, including for `automatic` variables; an empty `[]` can stand in for a dimensioned shell, but changing dimensions or switching between scalar and array is a dimension error. Non-empty branches must share the same nesting depth, while lengths may differ.
 
 ## Semantics Decisions Summary
 

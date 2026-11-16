@@ -318,6 +318,92 @@ int main() {
               r.error.find("repeat") != std::string::npos, r);
     }
 
+    // 16. 多维数组：空壳、部分下标、标量下标、类型/维度、深拷贝、input、状态快照
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer g_4 []\n"
+            "  reassign g_1_1_1_1 5\n"
+            "  output g\n");
+        check("四维空壳自动扩容", r.exitCode == 0 &&
+              r.output == "[[[[5]]]]", r);
+    }
+    {
+        auto r = run("function main\n  initialize float d_0 3.5\n  output d_0\n");
+        check("标量 _0 下标 -> 错误", r.exitCode == 1 &&
+              r.error.find("标量") != std::string::npos, r);
+    }
+    {
+        auto r = run("function main\n  initialize float d_0 3.5\n  output d_1\n");
+        check("标量 _1 下标 -> 错误", r.exitCode == 1 &&
+              r.error.find("标量") != std::string::npos, r);
+    }
+    {
+        auto r = run("function main\n  initialize float d_0 3.5\n  output d_0_1\n");
+        check("标量 _0_1 下标 -> 错误", r.exitCode == 1 &&
+              r.error.find("标量") != std::string::npos, r);
+    }
+    {
+        auto r = run("function main\n  initialize integer a_2 []\n  output a_1\n");
+        check("部分下标返回空子数组", r.exitCode == 0 && r.output == "[]", r);
+    }
+    {
+        auto r = run("function main\n  initialize integer a_2 []\n  output a_1_1_1\n");
+        check("下标数超过声明维度 -> 错误", r.exitCode == 1 &&
+              r.error.find("维度") != std::string::npos, r);
+    }
+    {
+        auto r = run("function main\n  initialize automatic a [1, [2]]\n");
+        check("不规则嵌套深度 -> 错误", r.exitCode == 1 &&
+              r.error.find("维度") != std::string::npos, r);
+    }
+    {
+        auto r = run("function main\n  initialize automatic a [1, \"x\", true]\n  output a\n");
+        check("automatic 数组混合标量并带引号输出", r.exitCode == 0 &&
+              r.output == "[1, \"x\", true]", r);
+    }
+    {
+        auto r = run("function main\n  initialize integer a_2 []\n  reassign a_2_3 42\n  output a\n");
+        check("稀疏扩容显示 unassigned", r.exitCode == 0 &&
+              r.output == "[unassigned, [unassigned, unassigned, 42]]", r);
+    }
+    {
+        auto r = run(
+            "function helper p\n"
+            "  reassign p_1 9\n"
+            "  output p\n"
+            "function main\n"
+            "  initialize automatic a [1, 2]\n"
+            "  invoke helper a\n"
+            "  output a\n");
+        check("数组函数参数深拷贝", r.exitCode == 0 && r.output == "[9, 2][1, 2]", r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer i 0\n"
+            "  repeat\n"
+            "    reassign i i + 1\n"
+            "    if i = 1\n"
+            "      next [1, 2]\n"
+            "    output obtain 1 : []\n"
+            "    exit 1\n");
+        check("next/obtain 数组快照", r.exitCode == 0 && r.output == "[1, 2]", r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer a_1 []\n"
+            "  input a_5\n"
+            "  output a_5\n", "42");
+        check("input 到数组叶元素", r.exitCode == 0 && r.output == "42", r);
+    }
+    {
+        auto r = run("function main\n  initialize integer a_2 []\n  input a_1\n", "42");
+        check("input 到子数组 -> 错误", r.exitCode == 1 &&
+              r.error.find("类型不匹配") != std::string::npos, r);
+    }
+
     std::cout << "\n==== interp_smoke 汇总: PASS=" << passCount << " FAIL=" << failCount
               << " ====\n";
     std::cout.flush();

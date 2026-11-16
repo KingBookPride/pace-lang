@@ -51,6 +51,9 @@ enum class TokenKind {
     GreaterEqual,
     LeftParen,
     RightParen,
+    LeftBracket,
+    RightBracket,
+    Underscore,
     Comma,
     Colon,
 

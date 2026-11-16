@@ -48,6 +48,20 @@ struct RepeatValuesGuard {
     std::vector<const std::vector<Value>*>* stack_;
 };
 
+std::string subscriptDisplay(
+    const std::string& name,
+    const std::vector<std::size_t>& indices) {
+    std::string result = name;
+    for (std::size_t index : indices) {
+        result += "_" + std::to_string(index);
+    }
+    return result;
+}
+
+bool isIntegralDouble(double value) {
+    return std::isfinite(value) && std::trunc(value) == value;
+}
+
 } // namespace
 
 Interpreter::Interpreter(
@@ -75,6 +89,10 @@ int Interpreter::run() {
     } catch (const ExitSignal&) {
         // 防御：不应到达顶层
         return 0;
+    } catch (const std::bad_alloc&) {
+        throw LangError(file_, 1, 1, "数组创建或复制时内存不足");
+    } catch (const std::length_error&) {
+        throw LangError(file_, 1, 1, "数组请求的大小超出解释器可表示范围");
     } catch (const LangError& error) {
         // 运行期错误在底层以空文件名抛出，这里统一补上源文件名，
         // 保证诊断格式始终为 文件:行:列: 错误: ...
@@ -98,16 +116,36 @@ Value Interpreter::eval(const Expr* expr) {
     if (const auto* node = dynamic_cast<const BoolLit*>(expr)) {
         return node->value;
     }
+    if (const auto* node = dynamic_cast<const ArrayLit*>(expr)) {
+        Array array;
+        array.elements.reserve(node->elements.size());
+        std::size_t maxChildDimensions = 0;
+        for (const auto& element : node->elements) {
+            Value child = eval(element.get());
+            maxChildDimensions = std::max(maxChildDimensions, valueDimensions(child));
+            array.elements.push_back(deepCopy(child));
+        }
+        const std::size_t dimensions = 1 + maxChildDimensions;
+        array.dimensions = dimensions;
+        Value result = makeArray(dimensions);
+        asArray(result) = std::move(array);
+        validateValueForDimensions(
+            result, dimensions, TypeKind::Automatic, node->line, node->col);
+        return result;
+    }
     if (const auto* node = dynamic_cast<const VarRef*>(expr)) {
         Variable* var = env_.find(node->name);
         if (var == nullptr) {
             throw LangError("", node->line, node->col, "变量 '" + node->name + "' 未声明");
         }
+        if (!node->indices.empty()) {
+            return readSubscript(*var, node->name, node->indices, node->line, node->col);
+        }
         if (!var->hasValue) {
             throw LangError("", node->line, node->col,
                 "变量 '" + node->name + "' 尚未赋值（处于无值状态）");
         }
-        return var->value;
+        return deepCopy(var->value);
     }
     if (const auto* node = dynamic_cast<const ObtainExpr*>(expr)) {
         if (repeatValuesStack_.empty()) {
@@ -124,7 +162,7 @@ Value Interpreter::eval(const Expr* expr) {
         const std::vector<Value>& values = *repeatValuesStack_.back();
         if (static_cast<std::uint64_t>(oneBased) <=
             static_cast<std::uint64_t>(values.size())) {
-            return values[static_cast<std::size_t>(oneBased - 1)];
+            return deepCopy(values[static_cast<std::size_t>(oneBased - 1)]);
         }
         if (node->defaultValue) {
             return eval(node->defaultValue.get());
@@ -181,33 +219,349 @@ Value Interpreter::eval(const Expr* expr) {
     throw LangError("", expr->line, expr->col, "无法求值的表达式");
 }
 
+std::size_t Interpreter::evalArrayIndex(const Expr* expr) {
+    Value raw = eval(expr);
+    if (isInteger(raw)) {
+        const std::int64_t value = asInteger(raw);
+        if (value <= 0) {
+            throw LangError("", expr->line, expr->col,
+                "数组下标必须求值为 1-based 正整数或整数值浮点数");
+        }
+        if (static_cast<std::uint64_t>(value) >
+            static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            throw LangError("", expr->line, expr->col, "数组下标过大，无法扩容");
+        }
+        return static_cast<std::size_t>(value);
+    }
+    if (isFloat(raw)) {
+        const double value = asFloat(raw);
+        const long double exact = static_cast<long double>(value);
+        if (!isIntegralDouble(value) || value < 1.0 ||
+            exact > static_cast<long double>(std::numeric_limits<std::size_t>::max())) {
+            throw LangError("", expr->line, expr->col,
+                "数组下标必须求值为 1-based 正整数或整数值浮点数");
+        }
+        return static_cast<std::size_t>(value);
+    }
+    throw LangError("", expr->line, expr->col,
+        "数组下标必须求值为 1-based 正整数或整数值浮点数");
+}
+
+std::size_t Interpreter::evalDimensionExpression(const Expr* expr) {
+    Value raw = eval(expr);
+    if (isInteger(raw)) {
+        const std::int64_t value = asInteger(raw);
+        if (value < 0 ||
+            static_cast<std::uint64_t>(value) >
+                static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            throw LangError("", expr->line, expr->col,
+                "维度声明必须求值为非负整数或整数值浮点数");
+        }
+        return static_cast<std::size_t>(value);
+    }
+    if (isFloat(raw)) {
+        const double value = asFloat(raw);
+        const long double exact = static_cast<long double>(value);
+        if (!isIntegralDouble(value) || value < 0.0 ||
+            exact > static_cast<long double>(std::numeric_limits<std::size_t>::max())) {
+            throw LangError("", expr->line, expr->col,
+                "维度声明必须求值为非负整数或整数值浮点数");
+        }
+        return static_cast<std::size_t>(value);
+    }
+    throw LangError("", expr->line, expr->col,
+        "维度声明必须求值为非负整数或整数值浮点数");
+}
+
+std::vector<std::size_t> Interpreter::evalArrayIndices(
+    const std::vector<std::unique_ptr<Expr>>& expressions) {
+    std::vector<std::size_t> indices;
+    indices.reserve(expressions.size());
+    for (const auto& expression : expressions) {
+        indices.push_back(evalArrayIndex(expression.get()));
+    }
+    return indices;
+}
+
+void Interpreter::validateValueForDimensions(
+    Value& value,
+    std::size_t dimensions,
+    TypeKind type,
+    int line,
+    int col) {
+    if (dimensions == 0) {
+        if (isArray(value) || isUnassigned(value)) {
+            throw LangError("", line, col,
+                "维度冲突：叶元素必须是标量，不能是数组或无值状态");
+        }
+        if (type != TypeKind::Automatic) {
+            value = convertTo(value, type, line, col);
+        }
+        return;
+    }
+
+    if (!isArray(value)) {
+        throw LangError("", line, col,
+            "维度冲突：目标需要 " + std::to_string(dimensions) +
+                " 维数组，但得到的是标量");
+    }
+    Array& array = asArray(value);
+    if (array.dimensions != dimensions) {
+        if (!array.elements.empty()) {
+            throw LangError("", line, col,
+                "维度冲突：数组声明维度与实际嵌套维度不一致");
+        }
+        // 空壳 [] 可适配任意剩余维度。
+        array.dimensions = dimensions;
+    }
+
+    for (Value& element : array.elements) {
+        if (isUnassigned(element)) {
+            continue;
+        }
+        if (dimensions == 1) {
+            if (isArray(element)) {
+                throw LangError("", line, col,
+                    "维度冲突：一维数组的叶元素不能是数组");
+            }
+            if (type != TypeKind::Automatic) {
+                element = convertTo(element, type, line, col);
+            }
+        } else {
+            if (!isArray(element)) {
+                throw LangError("", line, col,
+                    "维度冲突：同一数组的非空分支嵌套深度必须一致");
+            }
+            validateValueForDimensions(element, dimensions - 1, type, line, col);
+        }
+    }
+}
+
+void Interpreter::ensureArraySize(
+    Array& array,
+    std::size_t oneBased,
+    int line,
+    int col) {
+    if (oneBased > array.elements.max_size()) {
+        throw LangError("", line, col, "数组下标过大，无法扩容");
+    }
+    if (oneBased <= array.elements.size()) {
+        return;
+    }
+    try {
+        array.elements.resize(oneBased, Value{Unassigned{}});
+    } catch (const std::bad_alloc&) {
+        throw LangError("", line, col, "数组扩容内存不足");
+    } catch (const std::length_error&) {
+        throw LangError("", line, col, "数组下标过大，无法扩容");
+    }
+}
+
+Value Interpreter::readSubscript(
+    Variable& variable,
+    const std::string& name,
+    const std::vector<std::unique_ptr<Expr>>& indexExpressions,
+    int line,
+    int col) {
+    if (variable.dimensions == 0) {
+        throw LangError("", line, col,
+            "维度冲突：0 维标量不能使用下标访问");
+    }
+    if (indexExpressions.size() > variable.dimensions) {
+        throw LangError("", line, col,
+            "维度冲突：下标数量超过变量的声明维度");
+    }
+    if (!variable.hasValue) {
+        throw LangError("", line, col,
+            "变量尚未赋值（处于无值状态），不能使用下标访问");
+    }
+    if (!isArray(variable.value)) {
+        throw LangError("", line, col, "维度冲突：变量内部不是数组");
+    }
+
+    const std::vector<std::size_t> indices = evalArrayIndices(indexExpressions);
+    Array* current = &asArray(variable.value);
+    if (current->dimensions != variable.dimensions) {
+        if (!current->elements.empty()) {
+            throw LangError("", line, col, "维度冲突：数组根节点维度不一致");
+        }
+        current->dimensions = variable.dimensions;
+    }
+
+    for (std::size_t depth = 0; depth < indices.size(); ++depth) {
+        ensureArraySize(*current, indices[depth], line, col);
+        Value& slot = current->elements[indices[depth] - 1];
+        const bool isLast = depth + 1 == indices.size();
+
+        if (!isLast) {
+            const std::size_t remaining = variable.dimensions - depth - 1;
+            if (isUnassigned(slot)) {
+                slot = makeArray(remaining);
+            }
+            if (!isArray(slot)) {
+                throw LangError("", line, col,
+                    "维度冲突：数组中间层必须是数组或无值状态");
+            }
+            validateValueForDimensions(
+                slot, remaining, TypeKind::Automatic, line, col);
+            current = &asArray(slot);
+            continue;
+        }
+
+        if (indices.size() < variable.dimensions) {
+            const std::size_t remaining = variable.dimensions - indices.size();
+            if (isUnassigned(slot)) {
+                slot = makeArray(remaining);
+            }
+            if (!isArray(slot)) {
+                throw LangError("", line, col,
+                    "维度冲突：部分下标必须引用子数组");
+            }
+            validateValueForDimensions(
+                slot, remaining, TypeKind::Automatic, line, col);
+            return deepCopy(slot);
+        }
+
+        if (isUnassigned(slot)) {
+            throw LangError("", line, col,
+                "变量 '" + subscriptDisplay(name, indices) +
+                    "' 处于无值状态，无法使用");
+        }
+        if (isArray(slot)) {
+            throw LangError("", line, col,
+                "维度冲突：完整下标的叶元素不能是数组");
+        }
+        return deepCopy(slot);
+    }
+    throw LangError("", line, col, "内部错误：下标访问未到达目标");
+}
+
+void Interpreter::writeSubscript(
+    Variable& variable,
+    const std::vector<std::size_t>& indices,
+    Value value,
+    int line,
+    int col) {
+    if (variable.dimensions == 0) {
+        throw LangError("", line, col,
+            "维度冲突：0 维标量不能使用下标赋值");
+    }
+    if (indices.empty()) {
+        throw LangError("", line, col, "内部错误：writeSubscript 需要至少一个下标");
+    }
+    if (indices.size() > variable.dimensions) {
+        throw LangError("", line, col,
+            "维度冲突：下标数量超过变量的声明维度");
+    }
+    if (!variable.hasValue) {
+        throw LangError("", line, col,
+            "变量处于无值状态，不能使用下标赋值；请先整体 reassign");
+    }
+    if (!isArray(variable.value)) {
+        throw LangError("", line, col, "维度冲突：变量内部不是数组");
+    }
+
+    const std::size_t remainingDimensions = variable.dimensions - indices.size();
+    validateValueForDimensions(
+        value, remainingDimensions, variable.declaredType, line, col);
+
+    Array* current = &asArray(variable.value);
+    if (current->dimensions != variable.dimensions) {
+        if (!current->elements.empty()) {
+            throw LangError("", line, col, "维度冲突：数组根节点维度不一致");
+        }
+        current->dimensions = variable.dimensions;
+    }
+
+    for (std::size_t depth = 0; depth < indices.size(); ++depth) {
+        ensureArraySize(*current, indices[depth], line, col);
+        Value& slot = current->elements[indices[depth] - 1];
+        if (depth + 1 == indices.size()) {
+            slot = deepCopy(value);
+            variable.hasValue = true;
+            return;
+        }
+
+        const std::size_t remaining = variable.dimensions - depth - 1;
+        if (isUnassigned(slot)) {
+            slot = makeArray(remaining);
+        }
+        if (!isArray(slot)) {
+            throw LangError("", line, col,
+                "维度冲突：数组中间层必须是数组或无值状态");
+        }
+        validateValueForDimensions(
+            slot, remaining, TypeKind::Automatic, line, col);
+        current = &asArray(slot);
+    }
+}
+
+
 void Interpreter::execute(const Stmt* stmt) {
     if (const auto* node = dynamic_cast<const InitializeStmt*>(stmt)) {
         for (const auto& decl : node->declarations) {
-            if (!decl.value) {
-                // 无初值声明：变量已声明但处于无值状态，使用前必须先赋值
-                env_.declare(decl.name, decl.type, false, Value{});
-                continue;
+            std::size_t dimensions = 0;
+            if (decl.dimension) {
+                dimensions = evalDimensionExpression(decl.dimension.get());
             }
-            Value raw = eval(decl.value.get());
-            if (decl.type == TypeKind::Automatic) {
-                env_.declare(decl.name, TypeKind::Automatic, true, raw);
+
+            Value raw;
+            bool hasValue = false;
+            if (decl.value) {
+                raw = eval(decl.value.get());
+                hasValue = true;
+            } else if (decl.dimension && dimensions > 0) {
+                raw = makeArray(dimensions);
+                hasValue = true;
+            }
+
+            if (!decl.dimension) {
+                dimensions = decl.value ? valueDimensions(raw) : 0;
+            }
+
+            if (dimensions == 0) {
+                if (!decl.value) {
+                    env_.declare(decl.name, decl.type, false, Value{Unassigned{}}, 0);
+                    continue;
+                }
             } else {
-                Value converted = convertTo(raw, decl.type, decl.line, decl.col);
-                env_.declare(decl.name, decl.type, true, converted);
+                // 显式 N 维空壳与数组初值都进入统一结构校验。
+                hasValue = true;
             }
+
+            validateValueForDimensions(
+                raw, dimensions, decl.type, decl.line, decl.col);
+            env_.declare(decl.name, decl.type, hasValue, raw, dimensions);
         }
         return;
     }
     if (const auto* node = dynamic_cast<const ReassignStmt*>(stmt)) {
         Variable& var = env_.require(node->name, node->line, node->col);
-        Value raw = eval(node->value.get());
-        if (var.declaredType == TypeKind::Automatic) {
-            var.value = raw;
-        } else {
-            var.value = convertTo(raw, var.declaredType, node->line, node->col);
+        if (node->indices.empty()) {
+            Value raw = eval(node->value.get());
+            validateValueForDimensions(
+                raw, var.dimensions, var.declaredType, node->line, node->col);
+            var.value = deepCopy(raw);
+            var.hasValue = true;
+            return;
         }
-        var.hasValue = true;
+
+        if (var.dimensions == 0) {
+            throw LangError("", node->line, node->col,
+                "维度冲突：0 维标量不能使用下标赋值");
+        }
+        if (node->indices.size() > var.dimensions) {
+            throw LangError("", node->line, node->col,
+                "维度冲突：下标数量超过变量的声明维度");
+        }
+        if (!var.hasValue) {
+            throw LangError("", node->line, node->col,
+                "变量尚未赋值（处于无值状态），不能使用下标赋值；请先整体 reassign");
+        }
+
+        const std::vector<std::size_t> indices = evalArrayIndices(node->indices);
+        Value raw = eval(node->value.get());
+        writeSubscript(var, indices, std::move(raw), node->line, node->col);
         return;
     }
     if (const auto* node = dynamic_cast<const FreeStmt*>(stmt)) {
@@ -245,6 +599,33 @@ void Interpreter::execute(const Stmt* stmt) {
     }
     if (const auto* node = dynamic_cast<const InputStmt*>(stmt)) {
         Variable& var = env_.require(node->name, node->line, node->col);
+
+        std::vector<std::size_t> indices;
+        if (var.dimensions == 0) {
+            if (!node->indices.empty()) {
+                throw LangError("", node->line, node->col,
+                    "维度冲突：0 维标量不能使用下标 input");
+            }
+        } else {
+            if (node->indices.empty()) {
+                throw LangError("", node->line, node->col,
+                    "类型不匹配：input 不支持整数组或数组变量");
+            }
+            if (node->indices.size() > var.dimensions) {
+                throw LangError("", node->line, node->col,
+                    "维度冲突：下标数量超过变量的声明维度");
+            }
+            if (node->indices.size() < var.dimensions) {
+                throw LangError("", node->line, node->col,
+                    "类型不匹配：input 只支持标量或完整下标的数组叶元素");
+            }
+            if (!var.hasValue) {
+                throw LangError("", node->line, node->col,
+                    "变量尚未赋值（处于无值状态），不能 input 到数组元素");
+            }
+            indices = evalArrayIndices(node->indices);
+        }
+
         std::string line;
         if (!std::getline(in_, line)) {
             throw LangError("", node->line, node->col, "input 到达文件末尾（EOF）");
@@ -252,12 +633,18 @@ void Interpreter::execute(const Stmt* stmt) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
-        if (var.declaredType == TypeKind::Automatic) {
-            var.value = parseAutomaticInput(line);
+        Value parsed = var.declaredType == TypeKind::Automatic
+            ? parseAutomaticInput(line)
+            : parseTypedInput(line, var.declaredType, node->line, node->col);
+
+        if (var.dimensions == 0) {
+            validateValueForDimensions(
+                parsed, 0, var.declaredType, node->line, node->col);
+            var.value = deepCopy(parsed);
+            var.hasValue = true;
         } else {
-            var.value = parseTypedInput(line, var.declaredType, node->line, node->col);
+            writeSubscript(var, indices, std::move(parsed), node->line, node->col);
         }
-        var.hasValue = true;
         return;
     }
     if (const auto* node = dynamic_cast<const RepeatStmt*>(stmt)) {
@@ -391,7 +778,12 @@ ReturnSignal Interpreter::callFunction(
     env_.pushFrame();
     FrameGuard guard(&env_);
     for (std::size_t i = 0; i < function->parameters.size(); ++i) {
-        env_.declare(function->parameters[i], TypeKind::Automatic, true, arguments[i]);
+        env_.declare(
+            function->parameters[i],
+            TypeKind::Automatic,
+            true,
+            arguments[i],
+            valueDimensions(arguments[i]));
     }
 
     try {

@@ -1,0 +1,3 @@
+function main
+  initialize float d_0 3.5
+  output d_0

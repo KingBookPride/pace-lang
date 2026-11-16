@@ -319,6 +319,10 @@ std::unique_ptr<Stmt> Parser::parseInitialize(const Token& command) {
         const Token typeToken = peek();
         const TypeKind type = parseType();
         Token name = expectIdentifier("initialize 变量名", true);
+        std::unique_ptr<Expr> dimension;
+        if (match(TokenKind::Underscore)) {
+            dimension = parseIndexAtom("维度声明");
+        }
 
         // 初值为可选项：遇到换行或逗号即视为无初值声明，正常结束该声明
         std::unique_ptr<Expr> value;
@@ -328,7 +332,7 @@ std::unique_ptr<Stmt> Parser::parseInitialize(const Token& command) {
             value = parseExpression();
         }
         statement->declarations.push_back(
-            InitializeDecl{type, name.text, std::move(value), name.line, name.col});
+            InitializeDecl{type, name.text, std::move(dimension), std::move(value), name.line, name.col});
 
         if (!match(TokenKind::Comma)) {
             break;
@@ -345,6 +349,7 @@ std::unique_ptr<Stmt> Parser::parseReassign(const Token& command) {
     advance();
     auto statement = std::make_unique<ReassignStmt>(command.line, command.col);
     statement->name = expectIdentifier("reassign 变量名", true).text;
+    statement->indices = parseIndexSuffixes("下标");
     statement->value = parseExpression();
     expectNewline();
     return statement;
@@ -431,6 +436,7 @@ std::unique_ptr<Stmt> Parser::parseInput(const Token& command) {
     advance();
     auto statement = std::make_unique<InputStmt>(command.line, command.col);
     statement->name = expectIdentifier("input 变量名", true).text;
+    statement->indices = parseIndexSuffixes("下标");
     expectNewline();
     return statement;
 }
@@ -613,7 +619,10 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         return std::make_unique<BoolLit>(token.line, token.col, token.kind == TokenKind::True);
     case TokenKind::Identifier:
         advance();
-        return std::make_unique<VarRef>(token.line, token.col, token.text);
+        return std::make_unique<VarRef>(
+            token.line, token.col, token.text, parseIndexSuffixes("下标"));
+    case TokenKind::LeftBracket:
+        return parseArrayLiteral(token);
     case TokenKind::Obtain: {
         if (repeatDepth_ == 0) {
             fail(token, "obtain 只能在 repeat 内使用（包括 repeat 内的 if 块）");
@@ -651,6 +660,45 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
 }
 
+std::unique_ptr<Expr> Parser::parseArrayLiteral(const Token& token) {
+    advance(); // 消费 [
+    std::vector<std::unique_ptr<Expr>> elements;
+    if (match(TokenKind::RightBracket)) {
+        return std::make_unique<ArrayLit>(token.line, token.col, std::move(elements));
+    }
+
+    while (true) {
+        elements.push_back(parseExpression());
+        if (!match(TokenKind::Comma)) {
+            break;
+        }
+        if (check(TokenKind::RightBracket)) {
+            fail(peek(), "数组字面量不允许尾逗号");
+        }
+    }
+    expect(TokenKind::RightBracket, "数组字面量缺少右括号 ]");
+    return std::make_unique<ArrayLit>(token.line, token.col, std::move(elements));
+}
+
+std::unique_ptr<Expr> Parser::parseIndexAtom(const std::string& role) {
+    const Token token = peek();
+    if (check(TokenKind::IntegerLiteral) || check(TokenKind::FloatLiteral)) {
+        return parsePrimary();
+    }
+    if (check(TokenKind::LeftParen)) {
+        return parsePrimary();
+    }
+    fail(token, role + "必须使用正整数/整数值浮点数字面量或括号表达式");
+}
+
+std::vector<std::unique_ptr<Expr>> Parser::parseIndexSuffixes(const std::string& role) {
+    std::vector<std::unique_ptr<Expr>> indices;
+    while (match(TokenKind::Underscore)) {
+        indices.push_back(parseIndexAtom(role));
+    }
+    return indices;
+}
+
 Parser::InvokeParts Parser::parseInvokeParts() {
     Token name = expectIdentifier("invoke 目标函数名", false);
     const auto found = signatureByName_.find(name.text);
@@ -665,7 +713,8 @@ Parser::InvokeParts Parser::parseInvokeParts() {
             arityError(name, arity);
         }
         if (check(TokenKind::Newline) || check(TokenKind::Comma) ||
-            check(TokenKind::RightParen) || check(TokenKind::EndOfFile)) {
+            check(TokenKind::RightParen) || check(TokenKind::RightBracket) ||
+            check(TokenKind::EndOfFile)) {
             arityError(name, arity);
         }
         // 实参为逗号分隔的基本项；运算符（如 +/-）属于外层表达式，分组请用括号。

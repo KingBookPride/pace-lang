@@ -1,0 +1,8 @@
+function main
+  initialize automatic a [1, 2]
+  initialize automatic b a
+  initialize automatic c [a, [2.5, "p"]]
+  reassign a_1 99
+  output b, "|", c, "\n"
+  reassign b_1 8
+  output a

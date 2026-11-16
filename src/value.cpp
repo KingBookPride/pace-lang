@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <utility>
 
 namespace {
 
@@ -14,14 +15,17 @@ bool isIntegerValued(double value) {
 }
 
 std::string typeName(const Value& value) {
+    if (isUnassigned(value)) return "unassigned";
     if (std::holds_alternative<std::int64_t>(value)) return "integer";
     if (std::holds_alternative<double>(value)) return "float";
     if (std::holds_alternative<std::string>(value)) return "string";
-    return "boolean";
+    if (std::holds_alternative<bool>(value)) return "boolean";
+    return "array";
 }
 
 } // namespace
 
+bool isUnassigned(const Value& value) { return std::holds_alternative<Unassigned>(value); }
 bool isInteger(const Value& value) { return std::holds_alternative<std::int64_t>(value); }
 bool isFloat(const Value& value) { return std::holds_alternative<double>(value); }
 bool isNumeric(const Value& value) {
@@ -30,11 +34,38 @@ bool isNumeric(const Value& value) {
 }
 bool isString(const Value& value) { return std::holds_alternative<std::string>(value); }
 bool isBoolean(const Value& value) { return std::holds_alternative<bool>(value); }
+bool isArray(const Value& value) { return std::holds_alternative<ArrayPtr>(value); }
+bool isScalar(const Value& value) { return !isArray(value) && !isUnassigned(value); }
 
 std::int64_t asInteger(const Value& value) { return std::get<std::int64_t>(value); }
 double asFloat(const Value& value) { return std::get<double>(value); }
 bool asBoolean(const Value& value) { return std::get<bool>(value); }
 const std::string& asString(const Value& value) { return std::get<std::string>(value); }
+const Array& asArray(const Value& value) { return *std::get<ArrayPtr>(value); }
+Array& asArray(Value& value) { return *std::get<ArrayPtr>(value); }
+
+std::size_t valueDimensions(const Value& value) {
+    return isArray(value) ? asArray(value).dimensions : 0;
+}
+
+Value makeArray(std::size_t dimensions) {
+    auto array = std::make_shared<Array>();
+    array->dimensions = dimensions;
+    return Value(std::move(array));
+}
+
+Value deepCopy(const Value& value) {
+    if (!isArray(value)) {
+        return value;
+    }
+    auto copy = std::make_shared<Array>();
+    copy->dimensions = asArray(value).dimensions;
+    copy->elements.reserve(asArray(value).elements.size());
+    for (const Value& element : asArray(value).elements) {
+        copy->elements.push_back(deepCopy(element));
+    }
+    return Value(std::move(copy));
+}
 
 Value convertTo(const Value& value, TypeKind target, int line, int col) {
     switch (target) {
@@ -72,12 +103,14 @@ Value convertTo(const Value& value, TypeKind target, int line, int col) {
         if (isInteger(value)) return std::to_string(asInteger(value));
         if (isFloat(value)) return formatValue(value);
         if (isBoolean(value)) return asBoolean(value) ? "true" : "false";
-        return value; // string 恒等
+        if (isString(value)) return value;
+        throw LangError("", line, col,
+            "无法将 " + typeName(value) + " 转换为 string");
 
     case TypeKind::Automatic:
-        return value; // 不应到达（automatic 不转换）
+        return deepCopy(value);
     }
-    return value;
+    throw LangError("", line, col, "未知的类型转换目标");
 }
 
 namespace {
@@ -260,7 +293,41 @@ Value applyUnary(TokenKind op, const Value& operand, int line, int col) {
     throw LangError("", line, col, "不支持的一元运算符");
 }
 
+namespace {
+
+std::string quoteArrayString(const std::string& value) {
+    std::string result = "\"";
+    for (char c : value) {
+        switch (c) {
+        case '\\': result += "\\\\"; break;
+        case '"': result += "\\\""; break;
+        case '\n': result += "\\n"; break;
+        default: result.push_back(c); break;
+        }
+    }
+    result.push_back('"');
+    return result;
+}
+
+std::string formatArray(const Array& array) {
+    std::string result = "[";
+    for (std::size_t i = 0; i < array.elements.size(); ++i) {
+        if (i > 0) result += ", ";
+        const Value& element = array.elements[i];
+        if (isString(element)) {
+            result += quoteArrayString(asString(element));
+        } else {
+            result += formatValue(element);
+        }
+    }
+    result += "]";
+    return result;
+}
+
+} // namespace
+
 std::string formatValue(const Value& value) {
+    if (isUnassigned(value)) return "unassigned";
     if (isInteger(value)) return std::to_string(asInteger(value));
     if (isFloat(value)) {
         double d = asFloat(value);
@@ -275,5 +342,6 @@ std::string formatValue(const Value& value) {
         return text;
     }
     if (isBoolean(value)) return asBoolean(value) ? "true" : "false";
+    if (isArray(value)) return formatArray(asArray(value));
     return asString(value);
 }

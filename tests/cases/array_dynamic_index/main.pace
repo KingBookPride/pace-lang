@@ -1,0 +1,6 @@
+function main
+  initialize automatic a [10, 20, 30]
+  initialize integer i 1
+  output a_(i+1), " ", a_(2.0), "\n"
+  reassign a_(i+2) 99
+  output a_3

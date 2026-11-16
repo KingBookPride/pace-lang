@@ -54,6 +54,30 @@ private:
     Value parseTypedInput(const std::string& line, TypeKind type, int lline, int col);
     Value parseAutomaticInput(const std::string& line);
 
+    std::size_t evalArrayIndex(const Expr* expr);
+    std::size_t evalDimensionExpression(const Expr* expr);
+    std::vector<std::size_t> evalArrayIndices(
+        const std::vector<std::unique_ptr<Expr>>& expressions);
+    void validateValueForDimensions(
+        Value& value,
+        std::size_t dimensions,
+        TypeKind type,
+        int line,
+        int col);
+    void ensureArraySize(Array& array, std::size_t oneBased, int line, int col);
+    Value readSubscript(
+        Variable& variable,
+        const std::string& name,
+        const std::vector<std::unique_ptr<Expr>>& indices,
+        int line,
+        int col);
+    void writeSubscript(
+        Variable& variable,
+        const std::vector<std::size_t>& indices,
+        Value value,
+        int line,
+        int col);
+
     std::string file_;
     Environment env_;
     std::ostream& out_;
