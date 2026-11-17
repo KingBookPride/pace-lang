@@ -1,0 +1,7 @@
+function main
+  initialize automatic a [1, 2, 3]
+  initialize automatic b [] limit 150
+  reassign b a
+  output b, "\n"
+  reassign b [1]
+  output b

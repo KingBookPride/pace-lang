@@ -132,6 +132,7 @@ struct InitializeDecl {
     std::string name;
     std::unique_ptr<Expr> dimension; // nullptr=未显式声明维度；_0 仍有表达式节点
     std::unique_ptr<Expr> value;
+    std::unique_ptr<Expr> limit; // nullptr=未声明 limit（不限制）
     int line;
     int col;
 };

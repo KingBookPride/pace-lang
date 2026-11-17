@@ -47,6 +47,11 @@ std::size_t valueDimensions(const Value& value);
 Value makeArray(std::size_t dimensions);
 Value deepCopy(const Value& value);
 
+// 按语言规范估算值占用的内存（bit）：
+//   标量 / 无值槽位 / Array 节点各 64 bit；字符串 64 + 字符数 × 16 bit；
+//   数组为其节点开销加全部元素递归之和。溢出时饱和到 uint64 最大值。
+std::uint64_t estimateValueBits(const Value& value);
+
 // 把源标量转换为声明类型（manual 类型）。失败时抛出带位置的 LangError。
 Value convertTo(const Value& value, TypeKind target, int line, int col);
 

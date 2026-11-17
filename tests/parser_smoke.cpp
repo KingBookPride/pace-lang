@@ -70,6 +70,10 @@ function main
 )LANG", "冲突");
 
     expectError(R"LANG(function main
+  initialize integer a limit 1024, b limit 32
+)LANG", "缺少类型声明");
+
+    expectError(R"LANG(function main
   output invoke add 1
 function add a, b
   return a

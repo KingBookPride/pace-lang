@@ -317,6 +317,7 @@ std::unique_ptr<Stmt> Parser::parseInitialize(const Token& command) {
 
     while (true) {
         const Token typeToken = peek();
+        // 强类型：每一条变量声明都必须带有自己的类型关键字，禁止继承。
         const TypeKind type = parseType();
         Token name = expectIdentifier("initialize 变量名", true);
         std::unique_ptr<Expr> dimension;
@@ -324,15 +325,33 @@ std::unique_ptr<Stmt> Parser::parseInitialize(const Token& command) {
             dimension = parseIndexAtom("维度声明");
         }
 
-        // 初值为可选项：遇到换行或逗号即视为无初值声明，正常结束该声明
+        // 初值为可选项：遇到换行、逗号或 limit 关键字即视为无初值声明
         std::unique_ptr<Expr> value;
-        if (check(TokenKind::Newline) || check(TokenKind::Comma)) {
+        if (check(TokenKind::Newline) || check(TokenKind::Comma) ||
+            check(TokenKind::Limit)) {
             value = nullptr;
         } else {
             value = parseExpression();
         }
-        statement->declarations.push_back(
-            InitializeDecl{type, name.text, std::move(dimension), std::move(value), name.line, name.col});
+
+        // limit 必须紧跟在变量声明（及其可选初值）之后
+        std::unique_ptr<Expr> limit;
+        if (match(TokenKind::Limit)) {
+            if (check(TokenKind::Newline) || check(TokenKind::Comma) ||
+                check(TokenKind::EndOfFile)) {
+                fail(peek(), "limit 缺少限制表达式");
+            }
+            limit = parseExpression();
+        }
+
+        statement->declarations.push_back(InitializeDecl{
+            type,
+            name.text,
+            std::move(dimension),
+            std::move(value),
+            std::move(limit),
+            name.line,
+            name.col});
 
         if (!match(TokenKind::Comma)) {
             break;
@@ -731,7 +750,7 @@ TypeKind Parser::parseType() {
     case TokenKind::BooleanType: return TypeKind::Boolean;
     case TokenKind::StringType: return TypeKind::String;
     case TokenKind::Automatic: return TypeKind::Automatic;
-    default: fail(token, "initialize 必须显式给出 integer/float/boolean/string/automatic 类型");
+    default: fail(token, "缺少类型声明：initialize 的每个变量都必须带有 integer/float/boolean/string/automatic 类型关键字");
     }
 }
 

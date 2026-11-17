@@ -67,6 +67,39 @@ Value deepCopy(const Value& value) {
     return Value(std::move(copy));
 }
 
+std::uint64_t estimateValueBits(const Value& value) {
+    constexpr std::uint64_t kSlotBits = 64;
+    constexpr std::uint64_t kCharBits = 16;
+    constexpr std::uint64_t kMax = std::numeric_limits<std::uint64_t>::max();
+
+    if (isArray(value)) {
+        std::uint64_t total = kSlotBits; // Array 节点自身的固定管理开销
+        for (const Value& element : asArray(value).elements) {
+            const std::uint64_t child = estimateValueBits(element);
+            if (total > kMax - child) {
+                return kMax;
+            }
+            total += child;
+        }
+        return total;
+    }
+    if (isString(value)) {
+        // 字符数按 UTF-8 码点计（多字节字符只算一个字符）。
+        const std::string& text = asString(value);
+        std::uint64_t length = 0;
+        for (unsigned char byte : text) {
+            if ((byte & 0xC0) != 0x80) {
+                ++length;
+            }
+        }
+        if (length > (kMax - kSlotBits) / kCharBits) {
+            return kMax;
+        }
+        return kSlotBits + length * kCharBits;
+    }
+    return kSlotBits; // integer / float / boolean / unassigned 槽位
+}
+
 Value convertTo(const Value& value, TypeKind target, int line, int col) {
     switch (target) {
     case TypeKind::Integer:

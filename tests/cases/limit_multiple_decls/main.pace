@@ -1,0 +1,9 @@
+function main
+  initialize integer a limit 64, integer b limit 128
+  reassign a 1
+  reassign b 2
+  output a, " ", b, "\n"
+  initialize string s limit 96, string t limit 1000
+  reassign s "hi"
+  reassign t "hello"
+  output s, " ", t

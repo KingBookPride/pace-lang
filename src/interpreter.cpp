@@ -68,8 +68,9 @@ Interpreter::Interpreter(
     std::string file,
     const Program& program,
     std::ostream& out,
-    std::istream& in)
-    : file_(std::move(file)), out_(out), in_(in) {
+    std::istream& in,
+    std::ostream& err)
+    : file_(std::move(file)), out_(out), in_(in), err_(err) {
     for (const auto& function : program.functions) {
         env_.addFunction(function->name, function.get());
     }
@@ -357,6 +358,177 @@ void Interpreter::ensureArraySize(
     }
 }
 
+std::uint64_t Interpreter::evalLimit(const Expr* expr) {
+    const Value raw = eval(expr);
+    if (isInteger(raw)) {
+        const std::int64_t value = asInteger(raw);
+        if (value <= 0) {
+            throw LangError("", expr->line, expr->col,
+                "limit 必须求值为正整数（或小数部分为 0 的正浮点数）");
+        }
+        return static_cast<std::uint64_t>(value);
+    }
+    if (isFloat(raw)) {
+        const double value = asFloat(raw);
+        const long double exact = static_cast<long double>(value);
+        if (!isIntegralDouble(value) || value < 1.0 ||
+            exact > static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
+            throw LangError("", expr->line, expr->col,
+                "limit 必须求值为正整数（或小数部分为 0 的正浮点数）");
+        }
+        return static_cast<std::uint64_t>(value);
+    }
+    throw LangError("", expr->line, expr->col,
+        "limit 必须求值为正整数（或小数部分为 0 的正浮点数）");
+}
+
+void Interpreter::warnOverLimit(const std::string& name, std::uint64_t limit) {
+    // 规范要求的固定格式；不做去重，每次触发都打印一行。
+    err_ << "Warning: 变量 '" << name << "' 超出内存限制 " << limit
+         << " bit，操作被跳过。" << '\n';
+}
+
+bool Interpreter::exceedsLimitBits(
+    const Variable& variable,
+    std::uint64_t bits) const {
+    return variable.limitBits != 0 && bits > variable.limitBits;
+}
+
+bool Interpreter::exceedsLimit(
+    const Variable& variable,
+    const Value& candidate) const {
+    return exceedsLimitBits(variable, estimateValueBits(candidate));
+}
+
+// 只读访问：不物化任何路径。缺失的完整叶元素报无值；缺失的部分下标返回空子数组。
+Value Interpreter::readArrayValue(
+    const Value& root,
+    std::size_t dimensions,
+    const std::vector<std::size_t>& indices,
+    const std::string& name,
+    int line,
+    int col) const {
+    const Array* current = &asArray(root);
+    const bool fullLeafRead = indices.size() == dimensions;
+
+    for (std::size_t depth = 0; depth < indices.size(); ++depth) {
+        const std::size_t index = indices[depth];
+        const bool isLast = depth + 1 == indices.size();
+
+        if (index > current->elements.size()) {
+            if (fullLeafRead) {
+                throw LangError("", line, col,
+                    "变量 '" + subscriptDisplay(name, indices) +
+                        "' 处于无值状态，无法使用");
+            }
+            return makeArray(dimensions - indices.size());
+        }
+
+        const Value& slot = current->elements[index - 1];
+        if (isLast) {
+            if (!fullLeafRead) {
+                if (isUnassigned(slot)) {
+                    return makeArray(dimensions - indices.size());
+                }
+                if (!isArray(slot)) {
+                    throw LangError("", line, col,
+                        "维度冲突：部分下标必须引用子数组");
+                }
+                return deepCopy(slot);
+            }
+            if (isUnassigned(slot)) {
+                throw LangError("", line, col,
+                    "变量 '" + subscriptDisplay(name, indices) +
+                        "' 处于无值状态，无法使用");
+            }
+            if (isArray(slot)) {
+                throw LangError("", line, col,
+                    "维度冲突：完整下标的叶元素不能是数组");
+            }
+            return deepCopy(slot);
+        }
+
+        if (isUnassigned(slot)) {
+            if (fullLeafRead) {
+                throw LangError("", line, col,
+                    "变量 '" + subscriptDisplay(name, indices) +
+                        "' 处于无值状态，无法使用");
+            }
+            return makeArray(dimensions - indices.size());
+        }
+        if (!isArray(slot)) {
+            throw LangError("", line, col,
+                "维度冲突：数组中间层必须是数组或无值状态");
+        }
+        current = &asArray(slot);
+    }
+    throw LangError("", line, col, "内部错误：下标访问未到达目标");
+}
+
+bool Interpreter::readNeedsExpansion(
+    const Variable& variable,
+    const std::vector<std::size_t>& indices) const {
+    const Array* current = &asArray(variable.value);
+    for (std::size_t depth = 0; depth < indices.size(); ++depth) {
+        const std::size_t index = indices[depth];
+        if (index > current->elements.size()) {
+            return true;
+        }
+        const bool isLast = depth + 1 == indices.size();
+        const Value& slot = current->elements[index - 1];
+        if (isLast) {
+            return indices.size() < variable.dimensions && isUnassigned(slot);
+        }
+        if (isUnassigned(slot)) {
+            return true;
+        }
+        if (!isArray(slot)) {
+            return false; // 结构错误交给 readArrayValue 统一报维度冲突
+        }
+        current = &asArray(slot);
+    }
+    return false;
+}
+
+void Interpreter::materializeReadPath(
+    Value& root,
+    std::size_t dimensions,
+    const std::vector<std::size_t>& indices,
+    int line,
+    int col) {
+    Array* current = &asArray(root);
+    if (current->dimensions != dimensions) {
+        if (!current->elements.empty()) {
+            throw LangError("", line, col,
+                "维度冲突：数组根节点维度不一致");
+        }
+        current->dimensions = dimensions;
+    }
+
+    for (std::size_t depth = 0; depth < indices.size(); ++depth) {
+        ensureArraySize(*current, indices[depth], line, col);
+        Value& slot = current->elements[indices[depth] - 1];
+        const std::size_t remaining = dimensions - depth - 1;
+        const bool isLast = depth + 1 == indices.size();
+
+        if (isUnassigned(slot)) {
+            if (isLast && indices.size() == dimensions) {
+                return; // 完整叶元素保持无值，随后只读访问会报无值错误
+            }
+            slot = makeArray(remaining);
+        }
+        if (isLast) {
+            // 部分下标引用子数组；若为标量，由只读访问统一报维度冲突。
+            return;
+        }
+        if (!isArray(slot)) {
+            throw LangError("", line, col,
+                "维度冲突：数组中间层必须是数组或无值状态");
+        }
+        current = &asArray(slot);
+    }
+}
+
 Value Interpreter::readSubscript(
     Variable& variable,
     const std::string& name,
@@ -380,64 +552,64 @@ Value Interpreter::readSubscript(
     }
 
     const std::vector<std::size_t> indices = evalArrayIndices(indexExpressions);
-    Array* current = &asArray(variable.value);
-    if (current->dimensions != variable.dimensions) {
+    if (!readNeedsExpansion(variable, indices)) {
+        return readArrayValue(variable.value, variable.dimensions, indices, name, line, col);
+    }
+
+    // 扩容也在副本上完成：超限或异常时变量保持原状，绝不留半建成的空壳。
+    Value working = deepCopy(variable.value);
+    materializeReadPath(working, variable.dimensions, indices, line, col);
+    if (exceedsLimit(variable, working)) {
+        warnOverLimit(name, variable.limitBits);
+        return readArrayValue(variable.value, variable.dimensions, indices, name, line, col);
+    }
+
+    Value result = readArrayValue(working, variable.dimensions, indices, name, line, col);
+    variable.value = std::move(working);
+    return result;
+}
+
+void Interpreter::writeArrayValue(
+    Value& root,
+    std::size_t dimensions,
+    const std::vector<std::size_t>& indices,
+    const Value& value,
+    int line,
+    int col) {
+    Array* current = &asArray(root);
+    if (current->dimensions != dimensions) {
         if (!current->elements.empty()) {
-            throw LangError("", line, col, "维度冲突：数组根节点维度不一致");
+            throw LangError("", line, col,
+                "维度冲突：数组根节点维度不一致");
         }
-        current->dimensions = variable.dimensions;
+        current->dimensions = dimensions;
     }
 
     for (std::size_t depth = 0; depth < indices.size(); ++depth) {
         ensureArraySize(*current, indices[depth], line, col);
         Value& slot = current->elements[indices[depth] - 1];
-        const bool isLast = depth + 1 == indices.size();
-
-        if (!isLast) {
-            const std::size_t remaining = variable.dimensions - depth - 1;
-            if (isUnassigned(slot)) {
-                slot = makeArray(remaining);
-            }
-            if (!isArray(slot)) {
-                throw LangError("", line, col,
-                    "维度冲突：数组中间层必须是数组或无值状态");
-            }
-            validateValueForDimensions(
-                slot, remaining, TypeKind::Automatic, line, col);
-            current = &asArray(slot);
-            continue;
+        if (depth + 1 == indices.size()) {
+            slot = deepCopy(value);
+            return;
         }
 
-        if (indices.size() < variable.dimensions) {
-            const std::size_t remaining = variable.dimensions - indices.size();
-            if (isUnassigned(slot)) {
-                slot = makeArray(remaining);
-            }
-            if (!isArray(slot)) {
-                throw LangError("", line, col,
-                    "维度冲突：部分下标必须引用子数组");
-            }
-            validateValueForDimensions(
-                slot, remaining, TypeKind::Automatic, line, col);
-            return deepCopy(slot);
-        }
-
+        const std::size_t remaining = dimensions - depth - 1;
         if (isUnassigned(slot)) {
-            throw LangError("", line, col,
-                "变量 '" + subscriptDisplay(name, indices) +
-                    "' 处于无值状态，无法使用");
+            slot = makeArray(remaining);
         }
-        if (isArray(slot)) {
+        if (!isArray(slot)) {
             throw LangError("", line, col,
-                "维度冲突：完整下标的叶元素不能是数组");
+                "维度冲突：数组中间层必须是数组或无值状态");
         }
-        return deepCopy(slot);
+        validateValueForDimensions(
+            slot, remaining, TypeKind::Automatic, line, col);
+        current = &asArray(slot);
     }
-    throw LangError("", line, col, "内部错误：下标访问未到达目标");
 }
 
 void Interpreter::writeSubscript(
     Variable& variable,
+    const std::string& name,
     const std::vector<std::size_t>& indices,
     Value value,
     int line,
@@ -465,35 +637,16 @@ void Interpreter::writeSubscript(
     validateValueForDimensions(
         value, remainingDimensions, variable.declaredType, line, col);
 
-    Array* current = &asArray(variable.value);
-    if (current->dimensions != variable.dimensions) {
-        if (!current->elements.empty()) {
-            throw LangError("", line, col, "维度冲突：数组根节点维度不一致");
-        }
-        current->dimensions = variable.dimensions;
+    // 全部修改先落在副本上；只有内存估算通过后才原子替换。
+    Value working = deepCopy(variable.value);
+    writeArrayValue(working, variable.dimensions, indices, value, line, col);
+    if (exceedsLimit(variable, working)) {
+        warnOverLimit(name, variable.limitBits);
+        return;
     }
 
-    for (std::size_t depth = 0; depth < indices.size(); ++depth) {
-        ensureArraySize(*current, indices[depth], line, col);
-        Value& slot = current->elements[indices[depth] - 1];
-        if (depth + 1 == indices.size()) {
-            slot = deepCopy(value);
-            variable.hasValue = true;
-            return;
-        }
-
-        const std::size_t remaining = variable.dimensions - depth - 1;
-        if (isUnassigned(slot)) {
-            slot = makeArray(remaining);
-        }
-        if (!isArray(slot)) {
-            throw LangError("", line, col,
-                "维度冲突：数组中间层必须是数组或无值状态");
-        }
-        validateValueForDimensions(
-            slot, remaining, TypeKind::Automatic, line, col);
-        current = &asArray(slot);
-    }
+    variable.value = std::move(working);
+    variable.hasValue = true;
 }
 
 
@@ -504,6 +657,9 @@ void Interpreter::execute(const Stmt* stmt) {
             if (decl.dimension) {
                 dimensions = evalDimensionExpression(decl.dimension.get());
             }
+
+            const std::uint64_t limitBits =
+                decl.limit ? evalLimit(decl.limit.get()) : 0;
 
             Value raw;
             bool hasValue = false;
@@ -519,19 +675,46 @@ void Interpreter::execute(const Stmt* stmt) {
                 dimensions = decl.value ? valueDimensions(raw) : 0;
             }
 
-            if (dimensions == 0) {
-                if (!decl.value) {
-                    env_.declare(decl.name, decl.type, false, Value{Unassigned{}}, 0);
-                    continue;
-                }
-            } else {
+            if (dimensions == 0 && !decl.value) {
+                // 无初值标量：已声明但无值，占用 0 bit，必然满足 limit。
+                env_.declare(
+                    decl.name, decl.type, false, Value{Unassigned{}}, 0, limitBits);
+                continue;
+            }
+            if (dimensions > 0) {
                 // 显式 N 维空壳与数组初值都进入统一结构校验。
                 hasValue = true;
             }
 
             validateValueForDimensions(
                 raw, dimensions, decl.type, decl.line, decl.col);
-            env_.declare(decl.name, decl.type, hasValue, raw, dimensions);
+
+            const std::uint64_t postBits = hasValue ? estimateValueBits(raw) : 0;
+            if (limitBits != 0 && postBits > limitBits) {
+                // 初始化超限降级：不赋予初值；能容纳空壳时保留维度空壳，
+                // 否则退化为无值状态，保证变量占用始终不超过 limit。
+                warnOverLimit(decl.name, limitBits);
+                if (dimensions > 0 && limitBits >= 64) {
+                    env_.declare(
+                        decl.name,
+                        decl.type,
+                        true,
+                        makeArray(dimensions),
+                        dimensions,
+                        limitBits);
+                } else {
+                    env_.declare(
+                        decl.name,
+                        decl.type,
+                        false,
+                        Value{Unassigned{}},
+                        dimensions,
+                        limitBits);
+                }
+                continue;
+            }
+
+            env_.declare(decl.name, decl.type, hasValue, raw, dimensions, limitBits);
         }
         return;
     }
@@ -541,6 +724,10 @@ void Interpreter::execute(const Stmt* stmt) {
             Value raw = eval(node->value.get());
             validateValueForDimensions(
                 raw, var.dimensions, var.declaredType, node->line, node->col);
+            if (exceedsLimit(var, raw)) {
+                warnOverLimit(node->name, var.limitBits);
+                return; // 原子性：保留操作前的值
+            }
             var.value = deepCopy(raw);
             var.hasValue = true;
             return;
@@ -561,7 +748,8 @@ void Interpreter::execute(const Stmt* stmt) {
 
         const std::vector<std::size_t> indices = evalArrayIndices(node->indices);
         Value raw = eval(node->value.get());
-        writeSubscript(var, indices, std::move(raw), node->line, node->col);
+        writeSubscript(
+            var, node->name, indices, std::move(raw), node->line, node->col);
         return;
     }
     if (const auto* node = dynamic_cast<const FreeStmt*>(stmt)) {
@@ -570,7 +758,9 @@ void Interpreter::execute(const Stmt* stmt) {
             throw LangError("", node->line, node->col,
                 "变量 '" + node->name + "' 当前没有值，无法 free");
         }
+        // free 后不再占用内存；limit 与维度属于变量属性，继续保留。
         var.hasValue = false;
+        var.value = Value{Unassigned{}};
         return;
     }
     if (const auto* node = dynamic_cast<const DeleteStmt*>(stmt)) {
@@ -640,10 +830,16 @@ void Interpreter::execute(const Stmt* stmt) {
         if (var.dimensions == 0) {
             validateValueForDimensions(
                 parsed, 0, var.declaredType, node->line, node->col);
+            if (exceedsLimit(var, parsed)) {
+                // 输入文本已被消费，但不赋值；变量保持原值。
+                warnOverLimit(node->name, var.limitBits);
+                return;
+            }
             var.value = deepCopy(parsed);
             var.hasValue = true;
         } else {
-            writeSubscript(var, indices, std::move(parsed), node->line, node->col);
+            writeSubscript(
+                var, node->name, indices, std::move(parsed), node->line, node->col);
         }
         return;
     }

@@ -1,0 +1,8 @@
+function main
+  initialize integer a 1 limit 64
+  reassign a 2
+  initialize string s "hi" limit 96
+  reassign s "ho"
+  initialize integer m_2 [] limit 192
+  reassign m_1_1 9
+  output a, " ", s, " ", m

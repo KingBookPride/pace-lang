@@ -4,15 +4,18 @@
 #include "ast.h"
 #include "value.h"
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-// 单个变量：声明模式（manual 类型或 Automatic）、是否有值、当前值
+// 单个变量：声明模式（manual 类型或 Automatic）、固定维度、是否有值、当前值、
+// 以及 initialize 时确定、生命周期内不可修改的内存上限（0 表示未声明 limit）。
 struct Variable {
     TypeKind declaredType = TypeKind::Automatic;
     std::size_t dimensions = 0; // 固定总维度：0 为标量，数组维度在 initialize 后不变
     bool hasValue = false;
+    std::uint64_t limitBits = 0; // 0 = 不限制
     Value value{};
 };
 
@@ -43,7 +46,8 @@ public:
         TypeKind type,
         bool hasValue,
         const Value& value,
-        std::size_t dimensions = 0);
+        std::size_t dimensions = 0,
+        std::uint64_t limitBits = 0);
 
     // 从当前帧移除变量（delete）
     void remove(const std::string& name);

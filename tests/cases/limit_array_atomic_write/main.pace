@@ -1,0 +1,9 @@
+function main
+  initialize integer a_2 [] limit 200
+  reassign a_1_1 5
+  output a, "\n"
+  reassign a_10_10 7
+  output a, "\n"
+  reassign a_1 [1, 2, 3]
+  output a, "\n"
+  output a_1_1

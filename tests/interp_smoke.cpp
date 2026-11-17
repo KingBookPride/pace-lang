@@ -16,19 +16,21 @@ struct RunResult {
     int exitCode = 0;
     std::string output;
     std::string error;
+    std::string warnings;
     bool crashed = false;
 };
 
 RunResult run(const std::string& src, const std::string& input = "") {
     RunResult result;
     std::ostringstream out;
+    std::ostringstream err;
     std::istringstream in(input);
     try {
         Source source{"<test>", src};
         Lexer lexer(source);
         Parser parser(source.file, lexer.tokenize());
         Program program = parser.parse();
-        Interpreter interp("<test>", program, out, in);
+        Interpreter interp("<test>", program, out, in, err);
         result.exitCode = interp.run();
     } catch (const LangError& error) {
         result.error = error.what();
@@ -43,7 +45,21 @@ RunResult run(const std::string& src, const std::string& input = "") {
         result.exitCode = 2;
     }
     result.output = out.str();
+    result.warnings = err.str();
     return result;
+}
+
+std::size_t countOccurrences(const std::string& text, const std::string& needle) {
+    if (needle.empty()) {
+        return 0;
+    }
+    std::size_t count = 0;
+    std::size_t pos = 0;
+    while ((pos = text.find(needle, pos)) != std::string::npos) {
+        ++count;
+        pos += needle.size();
+    }
+    return count;
 }
 
 int passCount = 0;
@@ -402,6 +418,93 @@ int main() {
         auto r = run("function main\n  initialize integer a_2 []\n  input a_1\n", "42");
         check("input 到子数组 -> 错误", r.exitCode == 1 &&
               r.error.find("类型不匹配") != std::string::npos, r);
+    }
+
+    // limit：内存估算、初始化降级、写入原子性、深拷贝与 input
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer a_2 [] limit 192\n"
+            "  reassign a_1_1 9\n"
+            "  output a\n");
+        check("limit 精确边界允许写入", r.exitCode == 0 && r.output == "[[9]]" &&
+              r.warnings.empty(), r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer a_2 [] limit 200\n"
+            "  reassign a_1_1 5\n"
+            "  reassign a_10_10 7\n"
+            "  reassign a_1 [1, 2, 3]\n"
+            "  output a\n");
+        check("limit 超限写入原子回滚且每次告警",
+              r.exitCode == 0 && r.output == "[[5]]" &&
+              countOccurrences(r.warnings, "超出内存限制 200 bit") == 2, r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize string s \"abcdefgh\" limit 100\n"
+            "  reassign s \"hi\"\n"
+            "  output s\n");
+        check("initialize 超限降级为无值且 limit 保留",
+              r.exitCode == 0 && r.output == "hi" &&
+              countOccurrences(r.warnings, "超出内存限制 100 bit") == 1, r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer g_2 [[1], [2]] limit 200\n"
+            "  output g, \"|\"\n"
+            "  reassign g_1_1 7\n"
+            "  output g\n");
+        check("initialize 超限降级为维度空壳",
+              r.exitCode == 0 && r.output == "[]|[[7]]" &&
+              countOccurrences(r.warnings, "超出内存限制 200 bit") == 1, r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize automatic a [1, 2, 3]\n"
+            "  initialize automatic b [] limit 150\n"
+            "  reassign b a\n"
+            "  output b\n");
+        check("深拷贝受 limit 约束",
+              r.exitCode == 0 && r.output == "[]" &&
+              countOccurrences(r.warnings, "超出内存限制 150 bit") == 1, r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize string s \"\" limit 100\n"
+            "  input s\n"
+            "  output s\n"
+            "  input s\n"
+            "  output s\n",
+            std::string(100, 'x') + "\nhi\n");
+        check("input 超限跳过但消费文本流",
+              r.exitCode == 0 && r.output == "hi" &&
+              countOccurrences(r.warnings, "超出内存限制 100 bit") == 1, r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize string s limit 96\n"
+            "  reassign s \"你好\"\n"
+            "  output s\n");
+        check("字符串按 UTF-8 字符数估算",
+              r.exitCode == 0 && r.output == "你好" && r.warnings.empty(), r);
+    }
+    {
+        auto r = run("function main\n  initialize integer a 1 limit 0\n");
+        check("limit 0 -> 错误", r.exitCode == 1 &&
+              r.error.find("limit") != std::string::npos, r);
+    }
+    {
+        auto r = run("function main\n  initialize integer a 1 limit 2.5\n");
+        check("limit 小数 -> 错误", r.exitCode == 1 &&
+              r.error.find("limit") != std::string::npos, r);
     }
 
     std::cout << "\n==== interp_smoke 汇总: PASS=" << passCount << " FAIL=" << failCount

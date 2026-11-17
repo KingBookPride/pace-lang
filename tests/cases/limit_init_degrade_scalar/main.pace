@@ -1,0 +1,7 @@
+function main
+  initialize string s "abcdefgh" limit 100
+  output "start\n"
+  reassign s "hi"
+  output s, "\n"
+  reassign s "abcdefg"
+  output s

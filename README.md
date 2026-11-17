@@ -4,7 +4,7 @@
 
 Pace is an indentation-sensitive, explicitly typed scripting language with automatic typing (`automatic`). Source files use the `.pace` extension. This repository contains its C++17 interpreter.
 
-> Current version: **v0.4.0**
+> Current version: **v0.4.1**
 
 ## Build
 
@@ -62,14 +62,15 @@ Cases live under `tests/cases/<name>/`:
 - stdout is compared exactly; every non-empty line of `expected.err_contains` must appear as a substring on some stderr line (order-independent); each case times out after 10 seconds.
 - Error cases (`expected.exit` = 1) additionally require at least one stderr line matching `file:line:col: 错误: `.
 - Warning cases require at least one stderr line matching `file:line:col: warning: `, an exact stdout match, and exit code 0.
-- There are currently **62** cases: 25 positive, 35 error, 2 warning.
+- Runtime memory-limit warnings use the exact plain-text format `Warning: 变量 '<name>' 超出内存限制 <limit> bit，操作被跳过。` (no `file:line:col` prefix) and are asserted through `expected.err_contains`.
+- There are currently **73** cases: 33 positive, 38 error, 2 warning.
 
 ## Features
 
 - Indentation-sensitive lexer: space indentation, a consistent indent unit, INDENT/DEDENT, tab errors
 - `\note ... \note` multi-line comments (inactive inside strings); bare `\n` newlines within strings
 - Types: `integer` / `float` / `boolean` / `string` / `automatic`
-- Variable state machine: `initialize` / `reassign` / `free` / `delete` / `automatic`
+- Variable state machine: `initialize` (with an optional `limit <expr>` memory cap) / `reassign` / `free` / `delete` / `automatic`
 - Statements: `output` / `input` / `repeat` / `if` / `otherwise` / `exit` / `next` / `return` / `invoke` / `alias`
 - Functions: signature pre-scan, forward references, parse-time arity checks, name-conflict checks (parameters / variables / aliases)
 - Expression precedence: `and`/`or` (same level, left-associative, short-circuit) → `not` (binds to comparisons) → comparisons (chaining forbidden) → `+ -` → `* /` → unary `-` → primary
@@ -84,6 +85,12 @@ Cases live under `tests/cases/<name>/`:
 - Array indices are 1-based and must evaluate to a positive integer or a positive float with zero fractional part; 0, negative values, 1.5, strings, booleans, and extra dimensions beyond the object's declared dimension are errors
 - Arrays have value semantics and are deep-copied on assignment, nesting, function arguments, return values, and `next` / `obtain`; modifying a copy never affects the source
 - Array output uses `[1, true, "hello"]`, nested arrays such as `[1, [2, "p"], true]`, and renders unassigned holes as `unassigned`; `input` supports scalars and full leaf elements such as `input a_5`, but not whole arrays or subarrays
+- Memory limits attach to one declaration: `initialize integer a limit 1024`, `initialize integer a 5 limit 1024`, and `initialize integer a limit 1024, integer b limit 32` are all valid. Pace is strictly typed: every variable in a multi-variable `initialize` must repeat its own type keyword; omitting it is a `缺少类型声明` parse error. The expression is evaluated at run time and must be a positive integer or a float with a zero fractional part; the cap is stored in bits, belongs to the variable for its lifetime, and is never shared with another variable
+- Memory is estimated as: 64 bit for each `integer` / `float` / `boolean` / `unassigned` slot, 64 bit for each array node, and 64 + 16 × characters for each string (UTF-8 code points). Unassigned holes created by automatic growth count as 64-bit slots
+- Every operation that can grow a variable is checked against its cap first: `initialize`, whole-variable `reassign`, `input`, and automatic path growth for array writes and reads. If the post-operation estimate exceeds the cap, nothing is modified (no half-built shells); the interpreter prints `Warning: 变量 '<name>' 超出内存限制 <limit> bit，操作被跳过。` to stderr and continues with the next statement. Warnings are never deduplicated
+- An over-limit `initialize` does not store its initial value: it keeps an empty dimension shell when the shell itself fits, otherwise it degrades to the no-value state, and prints the warning
+- Deep copies obey the cap: `reassign b a` is skipped when copying `a` would exceed `b`'s limit. `input` consumes its line before the check, so a skipped assignment still advances the input stream
+- Reading an array also materializes missing paths; when that growth would exceed the cap it is skipped with the same warning. A missing leaf read then raises the usual unassigned error, while a partial subarray read still returns an empty array without modifying the variable
 - Float formatting: shortest round-trippable form, with `.0` appended to integral values
 
 ## Not Implemented
@@ -100,6 +107,9 @@ REPL, formatter, LSP, scientific notation, hexadecimal literals, `else if`, para
 - `next` and `obtain` are lexically restricted to the body of a `repeat` (including `if` / `otherwise` blocks nested in it). `obtain` indices are 1-based and are not coerced: a float index such as `1.5` is rejected even when mathematically integral.
 - `obtain` with a default is evaluated lazily: the default expression is only evaluated when the requested slot was not supplied by the previous round's `next`.
 - Array dimensions are fixed after `initialize`, including for `automatic` variables; an empty `[]` can stand in for a dimensioned shell, but changing dimensions or switching between scalar and array is a dimension error. Non-empty branches must share the same nesting depth, while lengths may differ.
+- Pace is strictly typed: every variable in `initialize a, b`-style multi-declarations must carry its own type keyword (`initialize integer a limit 1024, integer b limit 32`); omitting one is a `缺少类型声明` parse error.
+- A memory limit is fixed by the `initialize` that created the variable: `automatic` keeps it and `free` keeps it, while `delete` removes it together with the variable; re-initializing the same name in the same frame creates a fresh variable with the new (or absent) limit.
+- A limit below 64 bit cannot hold any scalar or array shell; such a variable remains in the no-value state and every later assignment is skipped with a warning. A limit is a per-variable logical budget, not a process-wide cap: function parameters and variables declared without `limit` are unbounded.
 
 ## Semantics Decisions Summary
 
@@ -113,3 +123,4 @@ REPL, formatter, LSP, scientific notation, hexadecimal literals, `else if`, para
 - Scope is bounded by functions; `if` / `repeat` do not introduce new scopes.
 - Runtime errors also carry `file:line:col`, are written to stderr, and exit with code 1.
 - Warnings are written to stderr and do not affect the exit code.
+- Memory limits are logical per-variable bit budgets, estimated with the fixed formula above and checked before any mutation; an over-limit operation is skipped atomically and only emits a `Warning:` line, so it never aborts the program.

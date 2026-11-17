@@ -1,0 +1,6 @@
+function main
+  initialize string s "" limit 100
+  input s
+  output "[", s, "]\n"
+  input s
+  output "[", s, "]"

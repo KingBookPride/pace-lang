@@ -53,11 +53,13 @@ void Environment::declare(
     TypeKind type,
     bool hasValue,
     const Value& value,
-    std::size_t dimensions) {
+    std::size_t dimensions,
+    std::uint64_t limitBits) {
     Variable var;
     var.declaredType = type;
     var.dimensions = dimensions;
     var.hasValue = hasValue;
+    var.limitBits = limitBits;
     var.value = deepCopy(value);
     frames_.back()[name] = std::move(var);
 }

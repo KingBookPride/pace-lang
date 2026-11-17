@@ -1,0 +1,5 @@
+function main
+  initialize integer g_2 [[1], [2]] limit 200
+  output g, "\n"
+  reassign g_1_1 7
+  output g

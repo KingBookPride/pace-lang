@@ -4,7 +4,7 @@
 
 Pace 是一门缩进敏感、显式类型、支持 `automatic` 自动类型的脚本语言，源文件扩展名为 `.pace`。本仓库是其 C++17 解释器。
 
-> 当前版本：**v0.4.0**
+> 当前版本：**v0.4.1**
 
 ## 构建
 
@@ -62,14 +62,15 @@ python tests\run_tests.py --exe .\pace.exe --filter input
 - stdout 精确比较；`expected.err_contains` 的每个非空行须作为子串出现在 stderr 某一行（不要求顺序）；单例超时 10 秒。
 - 错误用例（`expected.exit` = 1）额外要求 stderr 至少一行匹配 `文件:行:列: 错误: `。
 - warning 用例要求 stderr 至少一行匹配 `文件:行:列: warning: `，且 stdout 精确匹配、退出码 0。
-- 当前共 **62** 个用例：正例 25、错误例 35、warning 例 2。
+- 运行期的内存超限告警使用固定纯文本格式 `Warning: 变量 '<变量名>' 超出内存限制 <limit> bit，操作被跳过。`（不带 `文件:行:列` 前缀），通过 `expected.err_contains` 断言。
+- 当前共 **73** 个用例：正例 33、错误例 38、warning 例 2。
 
 ## 特性
 
 - 缩进敏感词法：空格缩进、统一缩进单位、INDENT/DEDENT、tab 报错
 - `\note ... \note` 跨行注释（字符串内不生效）；裸 `\n` 换行字符串
 - 类型：`integer` / `float` / `boolean` / `string` / `automatic`
-- 变量状态机：`initialize` / `reassign` / `free` / `delete` / `automatic`
+- 变量状态机：`initialize`（支持可选的 `limit <表达式>` 内存上限）/ `reassign` / `free` / `delete` / `automatic`
 - 语句：`output` / `input` / `repeat` / `if` / `otherwise` / `exit` / `next` / `return` / `invoke` / `alias`
 - 函数：签名预扫描、前向引用、参数个数解析期校验、名称冲突检查（参数 / 变量 / 别名）
 - 表达式优先级：`and`/`or`（同级左结合，短路）→ `not`（作用于比较）→ 比较（禁止链式）→ `+ -` → `* /` → 一元 `-` → 基本项
@@ -84,6 +85,12 @@ python tests\run_tests.py --exe .\pace.exe --filter input
 - 数组下标为 1-based，必须求值为正整数或小数部分为 0 的正浮点数；0、负数、1.5、字符串、布尔值，以及超过对象声明维度的下标均报错
 - 数组为值语义，在整体赋值、嵌套、函数传参、返回值及 `next` / `obtain` 时递归深拷贝，修改副本不会影响原数组
 - 数组输出格式为 `[1, true, "hello"]`，可嵌套如 `[1, [2, "p"], true]`，无值元素显示为 `unassigned`；`input` 仅支持普通标量或完整叶元素（如 `input a_5`），不支持整数组或子数组
+- 内存上限属于单个声明：`initialize integer a limit 1024`、`initialize integer a 5 limit 1024`、`initialize integer a limit 1024, integer b limit 32` 均合法。Pace 是强类型语言：多变量 `initialize` 中每个变量都必须重复写出自己的类型关键字，省略即报 `缺少类型声明` 解析错误。`limit` 表达式在运行期求值，必须是正整数或小数部分为 0 的正浮点数；上限以 bit 为单位，属于变量的永久属性，生命周期内不可修改，也不会共享给其它变量
+- 内存估算公式：`integer` / `float` / `boolean` / `unassigned` 每个槽位 64 bit，每个数组节点 64 bit，每个字符串 64 + 16 × 字符数（按 UTF-8 码点计）；自动扩容产生的无值洞同样按 64 bit 计入
+- 任何可能增大变量占用的操作都先与上限比较：`initialize`、整体 `reassign`、`input`、数组写入与读取时的自动扩容。若操作后的预估值超限，则不做任何修改（绝不留下半建成的空壳），向 stderr 打印 `Warning: 变量 '<变量名>' 超出内存限制 <limit> bit，操作被跳过。`，然后继续执行下一条语句；告警不去重，每次触发都打印
+- `initialize` 的初值本身超限时不赋予初值：能容纳维度空壳时保留空壳，否则降级为无值状态，并打印同样的告警
+- 深拷贝同样受上限约束：`reassign b a` 若拷贝 `a` 会使 `b` 超限，则整个赋值作废。`input` 在检查前已消费文本行，因此被跳过的输入仍会推进输入流
+- 读取数组时也会物化缺失路径；若该扩容会超限，则跳过扩容并打印告警：完整叶元素随后照常报无值错误，部分下标仍返回空子数组且不改变变量
 - 浮点格式化：最短可回读表示，整数值补 `.0`
 
 ## 未实现
@@ -100,6 +107,9 @@ REPL、格式化器、LSP、科学计数法、十六进制、`else if`、参数�
 - `next` 与 `obtain` 在词法上只允许位于 `repeat` 循环体内（含嵌套其中的 `if` / `otherwise` 块）。`obtain` 索引为 1-based 且不做类型转换：`1.5` 这类浮点索引即使数学上是整数也会被拒绝。
 - `obtain` 的默认值为惰性求值：只有当上一轮 `next` 未提供对应位置的值时，才会求值 `:` 后的默认表达式。
 - 数组维度在 `initialize` 后固定，包括 `automatic` 变量；空 `[]` 可充当对应维度的空壳，但改变维度或在标量与数组之间切换属于维度错误。非空分支的嵌套深度必须一致，各层长度可以不同。
+- Pace 是强类型语言：`initialize` 多变量声明中的每个变量都必须带自己的类型关键字（`initialize integer a limit 1024, integer b limit 32`），省略即报 `缺少类型声明` 解析错误。
+- 内存上限由创建该变量的 `initialize` 固定：`automatic` 与 `free` 都保留上限，`delete` 随变量一起移除；在同一帧内重新 `initialize` 同名变量会创建新变量，采用新的（或省略的）上限。
+- 小于 64 bit 的上限无法容纳任何标量或数组空壳，此类变量会一直处于无值状态，后续赋值全部被跳过并打印告警。上限是单变量的逻辑预算，不是进程级内存上限；函数参数与未声明 `limit` 的变量不受限制。
 
 ## 语义决策摘要
 
@@ -113,3 +123,4 @@ REPL、格式化器、LSP、科学计数法、十六进制、`else if`、参数�
 - 作用域以函数为界；`if` / `repeat` 不新建作用域。
 - 运行时错误同样带 `文件:行:列`，写 stderr，退出码 1。
 - warning 写 stderr，不影响退出码。
+- 内存上限是按上述固定公式估算的单变量 bit 预算，在任何修改前检查；超限操作原子跳过且只打印一行 `Warning:`，不会中止程序。
