@@ -58,6 +58,12 @@ hidden\note,"b"
         return token.kind == TokenKind::StringLiteral && token.text == "\\note";
     }));
 
+    const auto keywords = lex("size quantity limit\n");
+    assert(keywords.size() >= 3);
+    assert(keywords[0].kind == TokenKind::Size && keywords[0].text == "size");
+    assert(keywords[1].kind == TokenKind::Quantity && keywords[1].text == "quantity");
+    assert(keywords[2].kind == TokenKind::Limit && keywords[2].text == "limit");
+
     expectError("if 1 == 1\n", "==");
     expectError("function main\n\toutput 1\n", "tab");
     expectError("function main\n  if true\n      output 1\n", "缩进");

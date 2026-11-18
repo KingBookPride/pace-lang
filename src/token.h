@@ -29,6 +29,8 @@ enum class TokenKind {
     Invoke,
     Next,
     Obtain,
+    Size,
+    Quantity,
     Limit,
 
     IntegerType,

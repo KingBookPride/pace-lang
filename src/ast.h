@@ -117,6 +117,28 @@ struct ObtainExpr final : Expr {
     std::unique_ptr<Expr> defaultValue;
 };
 
+enum class AttributeKind {
+    Size,
+    Quantity
+};
+
+// 只读属性：变量名 + 可选下标链 + 末尾的 _size / _quantity。
+struct AttributeExpr final : Expr {
+    AttributeExpr(
+        int lineValue,
+        int colValue,
+        std::string nameValue,
+        std::vector<std::unique_ptr<Expr>> indicesValue,
+        AttributeKind kindValue)
+        : Expr(lineValue, colValue),
+          name(std::move(nameValue)),
+          indices(std::move(indicesValue)),
+          kind(kindValue) {}
+    std::string name;
+    std::vector<std::unique_ptr<Expr>> indices;
+    AttributeKind kind;
+};
+
 struct Stmt {
     Stmt(int lineValue, int colValue) : line(lineValue), col(colValue) {}
     virtual ~Stmt() = default;

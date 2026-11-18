@@ -1,0 +1,4 @@
+function main
+  initialize automatic a [[[1, 2], [3, 4]], [[5, 6]], []]
+  output a_1_size, " ", a_2_quantity, "\n"
+  output a_3_quantity

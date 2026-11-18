@@ -1,0 +1,3 @@
+function main
+  initialize automatic a [[]]
+  output a_size, " ", a_quantity

@@ -39,6 +39,13 @@ private:
         std::vector<std::unique_ptr<Expr>> arguments;
     };
 
+    struct SuffixChain {
+        std::vector<std::unique_ptr<Expr>> indices;
+        bool hasAttribute = false;
+        AttributeKind attribute = AttributeKind::Size;
+        Token attributeToken{TokenKind::Identifier, "", 0, 0};
+    };
+
     std::string file_;
     std::vector<Token> tokens_;
     std::size_t pos_ = 0;
@@ -92,16 +99,19 @@ private:
     std::unique_ptr<Expr> parseUnary();
     std::unique_ptr<Expr> parsePrimary();
     std::unique_ptr<Expr> parseArrayLiteral(const Token& token);
-    std::vector<std::unique_ptr<Expr>> parseIndexSuffixes(const std::string& role);
-    std::unique_ptr<Expr> parseIndexAtom(const std::string& role);
+    std::unique_ptr<Expr> parseIndexAtom(const std::string& role, bool allowIdentifier);
+    SuffixChain parseSuffixChain(const std::string& role);
     InvokeParts parseInvokeParts();
 
     TypeKind parseType();
     bool isTypeToken(TokenKind kind) const;
+    bool isKeywordToken(TokenKind kind) const;
     bool isComparison(TokenKind kind) const;
     bool isBuiltinCommand(TokenKind kind) const;
 
     [[noreturn]] void fail(const Token& token, const std::string& message) const;
+    [[noreturn]] void attributeReadonlyError(const Token& token, AttributeKind kind) const;
+    void rejectAttributeAsTarget();
     [[noreturn]] void arityError(const Token& name, std::size_t expected) const;
 };
 

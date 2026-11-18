@@ -56,6 +56,9 @@ const Token& Parser::expect(TokenKind kind, const std::string& message) {
 }
 
 Token Parser::expectIdentifier(const std::string& role, bool warn) {
+    if (check(TokenKind::Size) || check(TokenKind::Quantity)) {
+        fail(peek(), "关键字不能作为标识符");
+    }
     if (!check(TokenKind::Identifier)) {
         fail(peek(), "预期标识符作为" + role);
     }
@@ -320,9 +323,10 @@ std::unique_ptr<Stmt> Parser::parseInitialize(const Token& command) {
         // 强类型：每一条变量声明都必须带有自己的类型关键字，禁止继承。
         const TypeKind type = parseType();
         Token name = expectIdentifier("initialize 变量名", true);
+        rejectAttributeAsTarget();
         std::unique_ptr<Expr> dimension;
         if (match(TokenKind::Underscore)) {
-            dimension = parseIndexAtom("维度声明");
+            dimension = parseIndexAtom("维度声明", false);
         }
 
         // 初值为可选项：遇到换行、逗号或 limit 关键字即视为无初值声明
@@ -367,8 +371,13 @@ std::unique_ptr<Stmt> Parser::parseInitialize(const Token& command) {
 std::unique_ptr<Stmt> Parser::parseReassign(const Token& command) {
     advance();
     auto statement = std::make_unique<ReassignStmt>(command.line, command.col);
-    statement->name = expectIdentifier("reassign 变量名", true).text;
-    statement->indices = parseIndexSuffixes("下标");
+    Token name = expectIdentifier("reassign 变量名", true);
+    SuffixChain chain = parseSuffixChain("下标");
+    if (chain.hasAttribute) {
+        attributeReadonlyError(chain.attributeToken, chain.attribute);
+    }
+    statement->name = name.text;
+    statement->indices = std::move(chain.indices);
     statement->value = parseExpression();
     expectNewline();
     return statement;
@@ -378,6 +387,7 @@ std::unique_ptr<Stmt> Parser::parseFree(const Token& command) {
     advance();
     auto statement = std::make_unique<FreeStmt>(command.line, command.col);
     statement->name = expectIdentifier("free 变量名", true).text;
+    rejectAttributeAsTarget();
     expectNewline();
     return statement;
 }
@@ -386,6 +396,7 @@ std::unique_ptr<Stmt> Parser::parseDelete(const Token& command) {
     advance();
     auto statement = std::make_unique<DeleteStmt>(command.line, command.col);
     statement->name = expectIdentifier("delete 变量名", true).text;
+    rejectAttributeAsTarget();
     expectNewline();
     return statement;
 }
@@ -394,6 +405,7 @@ std::unique_ptr<Stmt> Parser::parseAutomatic(const Token& command) {
     advance();
     auto statement = std::make_unique<AutomaticStmt>(command.line, command.col);
     statement->name = expectIdentifier("automatic 变量名", true).text;
+    rejectAttributeAsTarget();
     expectNewline();
     return statement;
 }
@@ -454,8 +466,13 @@ std::unique_ptr<Stmt> Parser::parseOutput(const Token& command) {
 std::unique_ptr<Stmt> Parser::parseInput(const Token& command) {
     advance();
     auto statement = std::make_unique<InputStmt>(command.line, command.col);
-    statement->name = expectIdentifier("input 变量名", true).text;
-    statement->indices = parseIndexSuffixes("下标");
+    Token name = expectIdentifier("input 变量名", true);
+    SuffixChain chain = parseSuffixChain("下标");
+    if (chain.hasAttribute) {
+        attributeReadonlyError(chain.attributeToken, chain.attribute);
+    }
+    statement->name = name.text;
+    statement->indices = std::move(chain.indices);
     expectNewline();
     return statement;
 }
@@ -636,10 +653,20 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     case TokenKind::False:
         advance();
         return std::make_unique<BoolLit>(token.line, token.col, token.kind == TokenKind::True);
-    case TokenKind::Identifier:
+    case TokenKind::Identifier: {
         advance();
+        SuffixChain chain = parseSuffixChain("下标");
+        if (chain.hasAttribute) {
+            return std::make_unique<AttributeExpr>(
+                token.line,
+                token.col,
+                token.text,
+                std::move(chain.indices),
+                chain.attribute);
+        }
         return std::make_unique<VarRef>(
-            token.line, token.col, token.text, parseIndexSuffixes("下标"));
+            token.line, token.col, token.text, std::move(chain.indices));
+    }
     case TokenKind::LeftBracket:
         return parseArrayLiteral(token);
     case TokenKind::Obtain: {
@@ -699,7 +726,7 @@ std::unique_ptr<Expr> Parser::parseArrayLiteral(const Token& token) {
     return std::make_unique<ArrayLit>(token.line, token.col, std::move(elements));
 }
 
-std::unique_ptr<Expr> Parser::parseIndexAtom(const std::string& role) {
+std::unique_ptr<Expr> Parser::parseIndexAtom(const std::string& role, bool allowIdentifier) {
     const Token token = peek();
     if (check(TokenKind::IntegerLiteral) || check(TokenKind::FloatLiteral)) {
         return parsePrimary();
@@ -707,15 +734,35 @@ std::unique_ptr<Expr> Parser::parseIndexAtom(const std::string& role) {
     if (check(TokenKind::LeftParen)) {
         return parsePrimary();
     }
+    if (allowIdentifier && check(TokenKind::Identifier)) {
+        advance();
+        return std::make_unique<VarRef>(token.line, token.col, token.text);
+    }
+    if (allowIdentifier && isKeywordToken(token.kind)) {
+        fail(token, "'_' 后只允许下标或属性 size/quantity");
+    }
     fail(token, role + "必须使用正整数/整数值浮点数字面量或括号表达式");
 }
 
-std::vector<std::unique_ptr<Expr>> Parser::parseIndexSuffixes(const std::string& role) {
-    std::vector<std::unique_ptr<Expr>> indices;
-    while (match(TokenKind::Underscore)) {
-        indices.push_back(parseIndexAtom(role));
+Parser::SuffixChain Parser::parseSuffixChain(const std::string& role) {
+    SuffixChain chain;
+    while (check(TokenKind::Underscore)) {
+        const Token underscore = advance();
+        if (chain.hasAttribute) {
+            fail(underscore, "属性必须位于下标链末尾");
+        }
+        if (check(TokenKind::Size) || check(TokenKind::Quantity)) {
+            const Token attribute = advance();
+            chain.hasAttribute = true;
+            chain.attribute = attribute.kind == TokenKind::Size
+                ? AttributeKind::Size
+                : AttributeKind::Quantity;
+            chain.attributeToken = attribute;
+            continue;
+        }
+        chain.indices.push_back(parseIndexAtom(role, true));
     }
-    return indices;
+    return chain;
 }
 
 Parser::InvokeParts Parser::parseInvokeParts() {
@@ -760,6 +807,43 @@ bool Parser::isTypeToken(TokenKind kind) const {
            kind == TokenKind::Automatic;
 }
 
+bool Parser::isKeywordToken(TokenKind kind) const {
+    switch (kind) {
+    case TokenKind::True:
+    case TokenKind::False:
+    case TokenKind::Function:
+    case TokenKind::Initialize:
+    case TokenKind::Reassign:
+    case TokenKind::Free:
+    case TokenKind::Delete:
+    case TokenKind::Automatic:
+    case TokenKind::Alias:
+    case TokenKind::Output:
+    case TokenKind::Input:
+    case TokenKind::Repeat:
+    case TokenKind::If:
+    case TokenKind::Otherwise:
+    case TokenKind::Exit:
+    case TokenKind::Return:
+    case TokenKind::Invoke:
+    case TokenKind::Next:
+    case TokenKind::Obtain:
+    case TokenKind::Size:
+    case TokenKind::Quantity:
+    case TokenKind::Limit:
+    case TokenKind::IntegerType:
+    case TokenKind::FloatType:
+    case TokenKind::BooleanType:
+    case TokenKind::StringType:
+    case TokenKind::And:
+    case TokenKind::Or:
+    case TokenKind::Not:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool Parser::isComparison(TokenKind kind) const {
     return kind == TokenKind::Equal || kind == TokenKind::NotEqual ||
            kind == TokenKind::Less || kind == TokenKind::LessEqual ||
@@ -791,6 +875,26 @@ bool Parser::isBuiltinCommand(TokenKind kind) const {
 
 void Parser::fail(const Token& token, const std::string& message) const {
     throw LangError(file_, token.line, token.col, message);
+}
+
+void Parser::attributeReadonlyError(const Token& token, AttributeKind kind) const {
+    const std::string attribute =
+        kind == AttributeKind::Size ? "_size" : "_quantity";
+    fail(token,
+         "属性 '" + attribute + "' 是只读的，不能作为赋值或声明目标");
+}
+
+void Parser::rejectAttributeAsTarget() {
+    if (check(TokenKind::Underscore) &&
+        (peek(1).kind == TokenKind::Size ||
+         peek(1).kind == TokenKind::Quantity)) {
+        const Token& attribute = peek(1);
+        attributeReadonlyError(
+            attribute,
+            attribute.kind == TokenKind::Size
+                ? AttributeKind::Size
+                : AttributeKind::Quantity);
+    }
 }
 
 void Parser::arityError(const Token& name, std::size_t expected) const {

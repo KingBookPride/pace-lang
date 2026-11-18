@@ -507,6 +507,90 @@ int main() {
               r.error.find("limit") != std::string::npos, r);
     }
 
+    // v0.5.0-rc.1：_size / _quantity 只读属性与 limit 下限
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize automatic a [[[1, 2], [3, 4]], [[5, 6]], []]\n"
+            "  output a_size, \" \", a_quantity\n");
+        check("属性嵌套数组 size/quantity", r.exitCode == 0 && r.output == "832 2", r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize automatic a [[1], []]\n"
+            "  output a_size, \" \", a_quantity\n");
+        check("quantity 统计非空子树", r.exitCode == 0 && r.output == "256 1", r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize automatic a [[]]\n"
+            "  output a_size, \" \", a_quantity\n");
+        check("空数组 size/quantity", r.exitCode == 0 && r.output == "128 0", r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer a\n"
+            "  output a_size, \" \", a_quantity\n");
+        check("无值根变量按 64bit/0 计", r.exitCode == 0 && r.output == "64 0", r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize automatic a [1, 2]\n"
+            "  output a_5_size, \" \", a_5_quantity, \" \", a_quantity, \" \", a_size\n");
+        check("属性读取不扩容", r.exitCode == 0 && r.output == "64 0 2 192", r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize automatic a [10, 20, 30]\n"
+            "  initialize integer i 2\n"
+            "  output a_i, \" \", a_(i), \" \", a_i_quantity\n");
+        check("裸标识符下标与括号下标等价", r.exitCode == 0 && r.output == "20 20 1", r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize automatic a [1]\n"
+            "  output a_1_2_size\n");
+        check("属性下标数超过维度 -> 维度冲突", r.exitCode == 1 &&
+              r.error.find("维度冲突") != std::string::npos, r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer a 1\n"
+            "  reassign a_size 1\n");
+        check("属性目标只读", r.exitCode == 1 &&
+              r.error.find("只读") != std::string::npos, r);
+    }
+    {
+        auto r = run(
+            "function main\n"
+            "  initialize integer a 1\n"
+            "  automatic a_quantity\n");
+        check("automatic 属性目标 -> 只读", r.exitCode == 1 &&
+              r.error.find("只读") != std::string::npos, r);
+    }
+    {
+        auto r = run("function main\n  initialize integer size 1\n");
+        check("size 关键字不能作标识符", r.exitCode == 1 &&
+              r.error.find("关键字不能作为标识符") != std::string::npos, r);
+    }
+    {
+        auto r = run("function main\n  initialize integer a 1 limit 32\n");
+        check("limit 低于槽位 -> 错误", r.exitCode == 1 &&
+              r.error.find("limit 不能小于 64 bit") != std::string::npos, r);
+    }
+    {
+        auto r = run("function main\n  initialize integer a 1 limit 0\n");
+        check("limit 0 仍报正整数错误", r.exitCode == 1 &&
+              r.error.find("limit 必须求值为正整数") != std::string::npos, r);
+    }
+
     std::cout << "\n==== interp_smoke 汇总: PASS=" << passCount << " FAIL=" << failCount
               << " ====\n";
     std::cout.flush();

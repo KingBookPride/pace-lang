@@ -52,6 +52,10 @@ Value deepCopy(const Value& value);
 //   数组为其节点开销加全部元素递归之和。溢出时饱和到 uint64 最大值。
 std::uint64_t estimateValueBits(const Value& value);
 
+// _quantity 语义：已赋值的标量为 1，unassigned 为 0，
+// 数组为直接子元素中 quantity > 0 的个数（递归定义）。
+std::uint64_t valueQuantity(const Value& value);
+
 // 把源标量转换为声明类型（manual 类型）。失败时抛出带位置的 LangError。
 Value convertTo(const Value& value, TypeKind target, int line, int col);
 

@@ -100,6 +100,22 @@ std::uint64_t estimateValueBits(const Value& value) {
     return kSlotBits; // integer / float / boolean / unassigned 槽位
 }
 
+std::uint64_t valueQuantity(const Value& value) {
+    if (isUnassigned(value)) {
+        return 0;
+    }
+    if (!isArray(value)) {
+        return 1;
+    }
+    std::uint64_t count = 0;
+    for (const Value& element : asArray(value).elements) {
+        if (valueQuantity(element) > 0) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 Value convertTo(const Value& value, TypeKind target, int line, int col) {
     switch (target) {
     case TypeKind::Integer:

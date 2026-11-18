@@ -44,6 +44,8 @@ const std::unordered_map<std::string, TokenKind>& keywords() {
         {"invoke", TokenKind::Invoke},
         {"next", TokenKind::Next},
         {"obtain", TokenKind::Obtain},
+        {"size", TokenKind::Size},
+        {"quantity", TokenKind::Quantity},
         {"limit", TokenKind::Limit},
         {"integer", TokenKind::IntegerType},
         {"float", TokenKind::FloatType},
@@ -83,6 +85,8 @@ const char* tokenKindName(TokenKind kind) {
     case TokenKind::Invoke: return "Invoke";
     case TokenKind::Next: return "Next";
     case TokenKind::Obtain: return "Obtain";
+    case TokenKind::Size: return "Size";
+    case TokenKind::Quantity: return "Quantity";
     case TokenKind::Limit: return "Limit";
     case TokenKind::IntegerType: return "IntegerType";
     case TokenKind::FloatType: return "FloatType";

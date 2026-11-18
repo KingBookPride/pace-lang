@@ -1,0 +1,3 @@
+function main
+  initialize automatic a [1]
+  output a_size_1

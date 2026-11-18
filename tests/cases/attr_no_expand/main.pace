@@ -1,0 +1,4 @@
+function main
+  initialize automatic a [1, 2]
+  output a_5_size, " ", a_5_quantity, "\n"
+  output a_quantity, " ", a_size

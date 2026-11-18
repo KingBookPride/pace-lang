@@ -1,0 +1,3 @@
+function main
+  initialize string s "abc"
+  output s_size, " ", s_quantity

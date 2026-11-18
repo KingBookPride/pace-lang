@@ -4,7 +4,7 @@
 
 Pace is an indentation-sensitive, explicitly typed scripting language with automatic typing (`automatic`). Source files use the `.pace` extension. This repository contains its C++17 interpreter.
 
-> Current version: **v0.4.1**
+> Current version: **v0.5.0-rc.1**
 
 ## Build
 
@@ -63,7 +63,7 @@ Cases live under `tests/cases/<name>/`:
 - Error cases (`expected.exit` = 1) additionally require at least one stderr line matching `file:line:col: 错误: `.
 - Warning cases require at least one stderr line matching `file:line:col: warning: `, an exact stdout match, and exit code 0.
 - Runtime memory-limit warnings use the exact plain-text format `Warning: 变量 '<name>' 超出内存限制 <limit> bit，操作被跳过。` (no `file:line:col` prefix) and are asserted through `expected.err_contains`.
-- There are currently **73** cases: 33 positive, 38 error, 2 warning.
+- There are currently **88** cases: 44 positive, 42 error, 2 warning.
 
 ## Features
 
@@ -85,8 +85,23 @@ Cases live under `tests/cases/<name>/`:
 - Array indices are 1-based and must evaluate to a positive integer or a positive float with zero fractional part; 0, negative values, 1.5, strings, booleans, and extra dimensions beyond the object's declared dimension are errors
 - Arrays have value semantics and are deep-copied on assignment, nesting, function arguments, return values, and `next` / `obtain`; modifying a copy never affects the source
 - Array output uses `[1, true, "hello"]`, nested arrays such as `[1, [2, "p"], true]`, and renders unassigned holes as `unassigned`; `input` supports scalars and full leaf elements such as `input a_5`, but not whole arrays or subarrays
-- Memory limits attach to one declaration: `initialize integer a limit 1024`, `initialize integer a 5 limit 1024`, and `initialize integer a limit 1024, integer b limit 32` are all valid. Pace is strictly typed: every variable in a multi-variable `initialize` must repeat its own type keyword; omitting it is a `缺少类型声明` parse error. The expression is evaluated at run time and must be a positive integer or a float with a zero fractional part; the cap is stored in bits, belongs to the variable for its lifetime, and is never shared with another variable
-- Memory is estimated as: 64 bit for each `integer` / `float` / `boolean` / `unassigned` slot, 64 bit for each array node, and 64 + 16 × characters for each string (UTF-8 code points). Unassigned holes created by automatic growth count as 64-bit slots
+- Read-only attributes `_size` / `_quantity` may terminate a suffix chain: `a_size`, `a_1_2_size`, `a_1_quantity`. They may appear only once and only at the end; `a_size_1`, `a_size_size`, and `a_1_size_2` raise `属性必须位于下标链末尾`. `_size` returns the current value's `estimateValueBits` in **bits** (not bytes), clamped to `INT64_MAX`; `_quantity` returns 1 for an assigned scalar, 0 for `unassigned`, and for an array the number of direct children whose quantity is greater than 0:
+
+| Value | `_quantity` | `_size` |
+| --- | --- | --- |
+| `[1, 2]` | 2 | 192 |
+| `[[1], []]` | 1 | 256 |
+| `[[], []]` | 0 | 192 |
+| `[[]]` | 0 | 128 |
+| `[[[1,2],[3,4]], [[5,6]], []]` | 2 | 832 |
+
+- Attribute reads are strictly non-mutating: when `a_5` is missing, `a_5_size` returns `64` and `a_5_quantity` returns `0`, and `a` is untouched (no automatic expansion). More indices than the declared dimension is still a dimension error. Attributes are rvalues and cannot be assignment or declaration targets: `reassign a_size 1`, `input a_size`, `free a_size`, `delete a_size`, `initialize integer a_size 1`, and `automatic a_size` all raise `属性 '_size' 是只读的，不能作为赋值或声明目标` (`_quantity` uses the same message with its own name)
+- Units are **bits**, not bytes: `output a_size / 8` prints the byte count. For example, a 3-character string is `64 + 3 × 16 = 112` bit (14 bytes), and an `integer` is 64 bit (8 bytes)
+- For a variable with `limit`, `a_size > limit` is always false: over-limit mutations are skipped atomically, so `a_size <= limit` is an invariant. Compare against an explicit budget instead, e.g. `if a_size > 8192`
+- Bare identifier subscripts are accepted: `a_i` is exactly `a_(i)`, and `a_i_j` is `a_(i)_(j)`. Each `_` consumes exactly one token — an identifier, an integer/float literal, or a parenthesized expression — so `a_i + 1` parses as `(a_i) + 1`; a keyword after `_` (other than `size` / `quantity`) raises `'_' 后只允许下标或属性 size/quantity`
+- `size` and `quantity` are reserved keywords: they cannot be variable, function, parameter, or alias names and raise `关键字不能作为标识符`
+- Memory limits attach to one declaration: `initialize integer a limit 1024`, `initialize integer a 5 limit 1024`, and `initialize integer a limit 1024, integer b limit 128` are all valid. Pace is strictly typed: every variable in a multi-variable `initialize` must repeat its own type keyword; omitting it is a `缺少类型声明` parse error. The expression is evaluated at run time and must be a positive integer or an integral float **of at least 64** (`limit 0`, negatives, fractions, and 1–63 are rejected); the cap is stored in bits, belongs to the variable for its lifetime, and is never shared with another variable
+- Memory is estimated as: 64 bit for each `integer` / `float` / `boolean` / `unassigned` slot, 64 bit for each array node, and 64 + 16 × characters for each string (UTF-8 code points). Unassigned holes created by automatic growth count as 64-bit slots, and a root variable in the no-value state also counts as one 64-bit slot
 - Every operation that can grow a variable is checked against its cap first: `initialize`, whole-variable `reassign`, `input`, and automatic path growth for array writes and reads. If the post-operation estimate exceeds the cap, nothing is modified (no half-built shells); the interpreter prints `Warning: 变量 '<name>' 超出内存限制 <limit> bit，操作被跳过。` to stderr and continues with the next statement. Warnings are never deduplicated
 - An over-limit `initialize` does not store its initial value: it keeps an empty dimension shell when the shell itself fits, otherwise it degrades to the no-value state, and prints the warning
 - Deep copies obey the cap: `reassign b a` is skipped when copying `a` would exceed `b`'s limit. `input` consumes its line before the check, so a skipped assignment still advances the input stream
@@ -107,9 +122,10 @@ REPL, formatter, LSP, scientific notation, hexadecimal literals, `else if`, para
 - `next` and `obtain` are lexically restricted to the body of a `repeat` (including `if` / `otherwise` blocks nested in it). `obtain` indices are 1-based and are not coerced: a float index such as `1.5` is rejected even when mathematically integral.
 - `obtain` with a default is evaluated lazily: the default expression is only evaluated when the requested slot was not supplied by the previous round's `next`.
 - Array dimensions are fixed after `initialize`, including for `automatic` variables; an empty `[]` can stand in for a dimensioned shell, but changing dimensions or switching between scalar and array is a dimension error. Non-empty branches must share the same nesting depth, while lengths may differ.
-- Pace is strictly typed: every variable in `initialize a, b`-style multi-declarations must carry its own type keyword (`initialize integer a limit 1024, integer b limit 32`); omitting one is a `缺少类型声明` parse error.
+- Pace is strictly typed: every variable in `initialize a, b`-style multi-declarations must carry its own type keyword (`initialize integer a limit 1024, integer b limit 128`); omitting one is a `缺少类型声明` parse error.
 - A memory limit is fixed by the `initialize` that created the variable: `automatic` keeps it and `free` keeps it, while `delete` removes it together with the variable; re-initializing the same name in the same frame creates a fresh variable with the new (or absent) limit.
-- A limit below 64 bit cannot hold any scalar or array shell; such a variable remains in the no-value state and every later assignment is skipped with a warning. A limit is a per-variable logical budget, not a process-wide cap: function parameters and variables declared without `limit` are unbounded.
+- `limit` must be at least 64 bit: 1–63 raise `limit 不能小于 64 bit（变量本身占用 64 bit 槽位）`, while 0, negatives and non-integral floats keep the "positive integer" error. Omitting `limit` (internally the 0 sentinel) means unlimited; the 0 sentinel is not writable in the language. A limit is a per-variable logical budget, not a process-wide cap: function parameters and variables declared without `limit` are unbounded.
+- `size` / `quantity` are hard keywords: there is no soft reservation and no warning fallback. `_size` / `_quantity` are read-only rvalues and cannot be used as assignment or declaration targets.
 
 ## Semantics Decisions Summary
 
@@ -124,3 +140,4 @@ REPL, formatter, LSP, scientific notation, hexadecimal literals, `else if`, para
 - Runtime errors also carry `file:line:col`, are written to stderr, and exit with code 1.
 - Warnings are written to stderr and do not affect the exit code.
 - Memory limits are logical per-variable bit budgets, estimated with the fixed formula above and checked before any mutation; an over-limit operation is skipped atomically and only emits a `Warning:` line, so it never aborts the program.
+- `_size` uses the same `estimateValueBits` as limit enforcement; attribute reads never expand, materialize or mutate any variable.

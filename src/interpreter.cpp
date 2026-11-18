@@ -134,6 +134,9 @@ Value Interpreter::eval(const Expr* expr) {
             result, dimensions, TypeKind::Automatic, node->line, node->col);
         return result;
     }
+    if (const auto* node = dynamic_cast<const AttributeExpr*>(expr)) {
+        return evalAttribute(*node);
+    }
     if (const auto* node = dynamic_cast<const VarRef*>(expr)) {
         Variable* var = env_.find(node->name);
         if (var == nullptr) {
@@ -360,21 +363,30 @@ void Interpreter::ensureArraySize(
 
 std::uint64_t Interpreter::evalLimit(const Expr* expr) {
     const Value raw = eval(expr);
+    constexpr std::uint64_t kSlotBits = 64;
     if (isInteger(raw)) {
         const std::int64_t value = asInteger(raw);
         if (value <= 0) {
             throw LangError("", expr->line, expr->col,
                 "limit 必须求值为正整数（或小数部分为 0 的正浮点数）");
         }
+        if (static_cast<std::uint64_t>(value) < kSlotBits) {
+            throw LangError("", expr->line, expr->col,
+                "limit 不能小于 64 bit（变量本身占用 64 bit 槽位）");
+        }
         return static_cast<std::uint64_t>(value);
     }
     if (isFloat(raw)) {
         const double value = asFloat(raw);
         const long double exact = static_cast<long double>(value);
-        if (!isIntegralDouble(value) || value < 1.0 ||
+        if (!isIntegralDouble(value) || value <= 0.0 ||
             exact > static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
             throw LangError("", expr->line, expr->col,
                 "limit 必须求值为正整数（或小数部分为 0 的正浮点数）");
+        }
+        if (value < 64.0) {
+            throw LangError("", expr->line, expr->col,
+                "limit 不能小于 64 bit（变量本身占用 64 bit 槽位）");
         }
         return static_cast<std::uint64_t>(value);
     }
@@ -463,6 +475,64 @@ Value Interpreter::readArrayValue(
         current = &asArray(slot);
     }
     throw LangError("", line, col, "内部错误：下标访问未到达目标");
+}
+
+Value Interpreter::evalAttribute(const AttributeExpr& node) {
+    Variable* variable = env_.find(node.name);
+    if (variable == nullptr) {
+        throw LangError("", node.line, node.col,
+            "变量 '" + node.name + "' 未声明");
+    }
+    if (node.indices.size() > variable->dimensions) {
+        throw LangError("", node.line, node.col,
+            "维度冲突：下标数量超过变量的声明维度");
+    }
+    if (variable->dimensions == 0 && !node.indices.empty()) {
+        throw LangError("", node.line, node.col,
+            "维度冲突：0 维标量不能使用下标访问");
+    }
+
+    // 只读路径：缺失路径一律按 Unassigned 处理，绝不扩容或写回。
+    const Value missing{Unassigned{}};
+    const Value* current = variable->hasValue ? &variable->value : &missing;
+
+    for (std::size_t depth = 0; depth < node.indices.size(); ++depth) {
+        if (!isArray(*current)) {
+            if (isUnassigned(*current)) {
+                current = &missing;
+                break;
+            }
+            throw LangError("", node.line, node.col,
+                "维度冲突：数组中间层必须是数组或无值状态");
+        }
+
+        const Array& array = asArray(*current);
+        const std::size_t index = evalArrayIndex(node.indices[depth].get());
+        if (index > array.elements.size()) {
+            current = &missing;
+            break;
+        }
+
+        const Value& slot = array.elements[index - 1];
+        const bool isLast = depth + 1 == node.indices.size();
+        if (!isLast && isUnassigned(slot)) {
+            current = &missing;
+            break;
+        }
+        if (!isLast && !isArray(slot)) {
+            throw LangError("", node.line, node.col,
+                "维度冲突：数组中间层必须是数组或无值状态");
+        }
+        current = &slot;
+    }
+
+    if (node.kind == AttributeKind::Size) {
+        const std::uint64_t bits = estimateValueBits(*current);
+        const std::uint64_t maxBits = static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max());
+        return static_cast<std::int64_t>(bits > maxBits ? maxBits : bits);
+    }
+    return static_cast<std::int64_t>(valueQuantity(*current));
 }
 
 bool Interpreter::readNeedsExpansion(
@@ -669,27 +739,22 @@ void Interpreter::execute(const Stmt* stmt) {
             } else if (decl.dimension && dimensions > 0) {
                 raw = makeArray(dimensions);
                 hasValue = true;
+            } else {
+                raw = Value{Unassigned{}};
             }
 
             if (!decl.dimension) {
                 dimensions = decl.value ? valueDimensions(raw) : 0;
             }
 
-            if (dimensions == 0 && !decl.value) {
-                // 无初值标量：已声明但无值，占用 0 bit，必然满足 limit。
-                env_.declare(
-                    decl.name, decl.type, false, Value{Unassigned{}}, 0, limitBits);
-                continue;
-            }
-            if (dimensions > 0) {
+            if (hasValue) {
                 // 显式 N 维空壳与数组初值都进入统一结构校验。
-                hasValue = true;
+                validateValueForDimensions(
+                    raw, dimensions, decl.type, decl.line, decl.col);
             }
 
-            validateValueForDimensions(
-                raw, dimensions, decl.type, decl.line, decl.col);
-
-            const std::uint64_t postBits = hasValue ? estimateValueBits(raw) : 0;
+            // 无值变量同样按 64 bit 的 unassigned 槽位计入 limit 判定。
+            const std::uint64_t postBits = estimateValueBits(raw);
             if (limitBits != 0 && postBits > limitBits) {
                 // 初始化超限降级：不赋予初值；能容纳空壳时保留维度空壳，
                 // 否则退化为无值状态，保证变量占用始终不超过 limit。

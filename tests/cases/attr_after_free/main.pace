@@ -1,0 +1,4 @@
+function main
+  initialize integer a 7
+  free a
+  output a_size, " ", a_quantity

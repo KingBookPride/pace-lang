@@ -56,6 +56,9 @@ private:
     Value parseTypedInput(const std::string& line, TypeKind type, int lline, int col);
     Value parseAutomaticInput(const std::string& line);
 
+    // 只读属性：_size / _quantity，绝不触发自动扩容或写回。
+    Value evalAttribute(const AttributeExpr& node);
+
     // limit：运行期求值并校验为自然数；超限只告警并跳过操作，绝不修改变量。
     std::uint64_t evalLimit(const Expr* expr);
     void warnOverLimit(const std::string& name, std::uint64_t limit);

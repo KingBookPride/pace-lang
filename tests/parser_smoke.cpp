@@ -121,5 +121,44 @@ function main
     alias output show
 )LANG", "函数体顶层");
 
+    Program attributes = parseText(R"LANG(function main
+  initialize automatic a [1, 2]
+  initialize integer i 1
+  output a_i, a_(i), a_size, a_1_quantity
+)LANG");
+    const auto& attributeBody = attributes.functions[0]->body;
+    const auto& attributeOutput =
+        dynamic_cast<const OutputStmt&>(*attributeBody[2]);
+    assert(attributeOutput.values.size() == 4);
+    const auto& bareIndex = dynamic_cast<const VarRef&>(*attributeOutput.values[0]);
+    assert(bareIndex.name == "a" && bareIndex.indices.size() == 1);
+    const auto& sizeAttribute =
+        dynamic_cast<const AttributeExpr&>(*attributeOutput.values[2]);
+    assert(sizeAttribute.name == "a" && sizeAttribute.indices.empty());
+    assert(sizeAttribute.kind == AttributeKind::Size);
+    const auto& quantityAttribute =
+        dynamic_cast<const AttributeExpr&>(*attributeOutput.values[3]);
+    assert(quantityAttribute.name == "a" && quantityAttribute.indices.size() == 1);
+    assert(quantityAttribute.kind == AttributeKind::Quantity);
+
+    expectError(R"LANG(function main
+  initialize integer size 1
+)LANG", "关键字不能作为标识符");
+
+    expectError(R"LANG(function main
+  initialize integer a 1
+  reassign a_size 1
+)LANG", "只读");
+
+    expectError(R"LANG(function main
+  initialize automatic a [1]
+  output a_size_1
+)LANG", "下标链末尾");
+
+    expectError(R"LANG(function main
+  initialize integer a 1
+  automatic a_quantity
+)LANG", "只读");
+
     return 0;
 }
